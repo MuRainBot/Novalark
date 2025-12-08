@@ -1,0 +1,20 @@
+core:
+  log_level: DEBUG
+  superusers:
+    - "123456"
+    - "789012"
+
+adapters:
+  - id: "qq_bot1"
+    type: "onebot_v11"
+    host: "127.0.0.1"
+    port: 5701
+    bot_url: "http://127.0.0.1:5700"
+
+  - id: "qq_bot2"
+    type: "onebot_v11"
+    host: "127.0.0.1"
+    port: 5702
+    bot_url: "http://127.0.0.1:5700"
+
+plugins:
