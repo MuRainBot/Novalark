@@ -1,121 +1,60 @@
-"""
-MRB2的路径管理
-"""
-import os
+"""路径管理。显式初始化、显式读取。"""
+
+from __future__ import annotations
+
+import sys
 from pathlib import Path
 
 
-class PathManager:
-    """
-    路径管理器
-    """
-    def __init__(self, work_path: Path):
-        self.WORK_PATH = work_path
-        self.DATA_PATH = self.WORK_PATH / "data"
-        self.LOGS_PATH = self.WORK_PATH / "logs"
-        self.PLUGINS_PATH = self.WORK_PATH / "plugins"
-        self.CONFIG_PATH = self.WORK_PATH / "config.yaml"
-        self.CACHE_PATH = self.DATA_PATH / "cache"
+class Paths:
+    """工作目录下的全部路径。"""
 
-        self.ensure_all_dirs_exist()
+    def __init__(self, work_dir: Path) -> None:
+        self.WORK_DIR = work_dir.resolve()
+        self.DATA_DIR = self.WORK_DIR / "data"
+        self.LOGS_DIR = self.WORK_DIR / "logs"
+        self.PLUGINS_DIR = self.WORK_DIR / "plugins"
+        self.PLUGIN_CONFIGS_DIR = self.WORK_DIR / "plugin_configs"
+        self.CONFIG_FILE = self.WORK_DIR / "config.yaml"
+        self.CACHE_DIR = self.DATA_DIR / "cache"
 
-    def ensure_all_dirs_exist(self):
-        """
-        确保所有必需的目录都存在
-        """
-        self.DATA_PATH.mkdir(exist_ok=True)
-        self.LOGS_PATH.mkdir(exist_ok=True)
-        self.PLUGINS_PATH.mkdir(exist_ok=True)
-        self.CACHE_PATH.mkdir(exist_ok=True)
+    def ensure_dirs(self) -> None:
+        for directory in (
+            self.DATA_DIR,
+            self.LOGS_DIR,
+            self.PLUGINS_DIR,
+            self.PLUGIN_CONFIGS_DIR,
+            self.CACHE_DIR,
+        ):
+            directory.mkdir(parents=True, exist_ok=True)
 
-
-class PathManagerProxy:
-    """
-    路径代理类，会在首次操作时把自己替换掉。
-    """
-
-    def __init__(self):
-        """
-        初始化代理对象，存储初始化 PathManager 所需的 work_path。
-        """
-        object.__setattr__(self, '_initialized', False)  # 标记是否已初始化真实对象
-
-    def _initialize_and_transform(self):
-        """
-        这个函数负责初始化真正的 PathManager 实例，并使代理对象“替换掉自己”。
-        它通过改变自身的 __class__ 和更新 __dict__ 来实现。
-        """
-        if object.__getattribute__(self, '_initialized'):
-            return  # 已经初始化过了，直接返回
-
-        work_path = os.getcwd()
-
-        print(f"由于Path在未被正常初始化的时候调用，临时初始化，工作目录: {work_path}")
-
-        init_paths(work_path)
-        real_instance = paths
-
-        self.__dict__.update(real_instance.__dict__)
-
-        object.__setattr__(self, '_initialized', True)
-
-        self.__class__ = PathManager
-
-    def __getattr__(self, name):
-        """
-        当访问代理对象上不存在的属性时（包括方法），此方法会被调用。
-        它会触发真实 PathManager 对象的初始化。
-        """
-        # 如果当前对象尚未初始化为 PathManager，则进行初始化和转换
-        if not object.__getattribute__(self, '_initialized'):
-            self._initialize_and_transform()
-
-        # 此时，self 已经变成了 PathManager 实例，其属性已在 __dict__ 或 PathManager 的方法中
-        # 再次尝试从自身获取属性，这次会成功（如果 PathManager 有该属性/方法）
-        return object.__getattribute__(self, name)
-
-    def __setattr__(self, name, value):
-        """
-        当设置代理对象的属性时，此方法会被调用。
-        它也会触发真实 PathManager 对象的初始化。
-        """
-        # 如果正在设置代理自身内部的延迟参数或初始化标记，直接通过基类设置，避免递归
-        if name in ['_initialized']:
-            object.__setattr__(self, name, value)
-        else:
-            # 否则，表示用户正在操作一个业务属性，触发初始化
-            if not object.__getattribute__(self, '_initialized'):
-                self._initialize_and_transform()
-            # 初始化完成后，通过基类设置属性，因为现在 self 已经是 PathManager
-            object.__setattr__(self, name, value)
-
-    def __delattr__(self, name):
-        """
-        当删除代理对象的属性时，此方法会被调用。
-        它也会触发真实 PathManager 对象的初始化。
-        """
-        if name in ['_initialized']:
-            object.__delattr__(self, name)
-        else:
-            if not object.__getattribute__(self, '_initialized'):
-                self._initialize_and_transform()
-            object.__delattr__(self, name)
+    def register_import_root(self) -> None:
+        """把工作目录加进 ``sys.path``，让 ``import plugins.foo`` 可用。"""
+        root = str(self.WORK_DIR)
+        if root not in sys.path:
+            sys.path.insert(0, root)
 
 
-paths: PathManager = PathManagerProxy()
+_paths: Paths | None = None
 
 
-def init_paths(work_path_str: str):
-    """
-    初始化路径管理器
-    Args:
-        work_path_str: 工作目录
-    """
-    global paths
-    if isinstance(paths, PathManagerProxy):
-        paths = PathManager(Path(work_path_str))
+def init_paths(work_dir: str | Path | None = None) -> Paths:
+    """初始化路径单例。重复调用返回已有实例。"""
+    global _paths
+    if _paths is None:
+        _paths = Paths(Path(work_dir) if work_dir is not None else Path.cwd())
+        _paths.ensure_dirs()
+    return _paths
 
 
-# 如果是 MRB2 开发环境，自动初始化
-if os.path.isdir(os.path.join(os.getcwd(), "murainbot")) and os.path.isdir(os.path.join(os.getcwd(), "plugins")):
-    init_paths(os.getcwd())
+def get_paths() -> Paths:
+    """读取路径单例。未初始化则报错。"""
+    if _paths is None:
+        raise RuntimeError("paths 尚未初始化，请先调用 init_paths()")
+    return _paths
+
+
+def reset_paths() -> None:
+    """清掉单例（测试用）。"""
+    global _paths
+    _paths = None

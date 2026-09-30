@@ -1,0 +1,32 @@
+[project]
+name = "novalark"
+version = "0.1.0"
+description = "轻量、多协议、asyncio 的 QQ 机器人框架"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.9",
+    "httpx>=0.27",
+    "starlette>=0.40",
+    "uvicorn>=0.30",
+    "websockets>=13.0",
+    "rich>=13.0",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.24", "pyright>=1.1"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.setuptools.packages.find]
+include = ["novalark*"]
+
+[tool.pyright]
+include = ["novalark"]
+pythonVersion = "3.12"
