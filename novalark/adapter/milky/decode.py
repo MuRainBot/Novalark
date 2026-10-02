@@ -9,7 +9,13 @@ from __future__ import annotations
 from typing import Any
 
 from ...log import get_logger
-from ...model.entities import Sender
+from ...model.entities import (
+    FriendRequest,
+    GroupInviteRequest,
+    GroupJoinRequest,
+    Sender,
+)
+from ...model.enums import ImageSubType, ReactionType
 from ...model.events import (
     BotOfflineEvent,
     Event,
@@ -208,7 +214,7 @@ def _decode_notice(event_type: str, data: dict[str, Any], **common: Any) -> Even
                 ref=_group_ref(group_id, data),
                 user_id=user_id,
                 face_id=text("face_id"),
-                reaction_type=text("reaction_type") or "face",
+                reaction_type=ReactionType(text("reaction_type") or ReactionType.FACE),
                 is_add=bool(data.get("is_add")),
                 **common,
             )
@@ -253,6 +259,7 @@ def _decode_notice(event_type: str, data: dict[str, Any], **common: Any) -> Even
                 file_id=text("file_id"),
                 name=text("file_name"),
                 size=to_int(data.get("file_size")),
+                file_hash=text("file_hash"),
                 is_self=bool(data.get("is_self")),
                 **common,
             )
@@ -261,33 +268,53 @@ def _decode_notice(event_type: str, data: dict[str, Any], **common: Any) -> Even
             # Milky 批准好友申请认的是 uid 不是 flag，把它放进 flag —— 那是
             # 「处理这条申请要带上的凭据」，语义正好
             return FriendRequestEvent(
-                user_id=sender_id,
-                comment=text("comment"),
-                via=text("via"),
-                flag=text("initiator_uid"),
+                request=FriendRequest(
+                    user_id=sender_id,
+                    comment=text("comment"),
+                    via=text("via"),
+                    flag=text("initiator_uid"),
+                    is_filtered=bool(data.get("is_filtered")),
+                ),
                 **common,
             )
 
         case "group_join_request":
+            # 自己申请入群：initiator_id 就是申请人
             return GroupJoinRequestEvent(
-                group_id=group_id,
-                user_id=sender_id or to_int(data.get("target_user_id")),
-                comment=text("comment"),
-                sequence=to_int(data.get("notification_seq")),
+                request=GroupJoinRequest(
+                    group_id=group_id,
+                    user_id=to_int(data.get("initiator_id")),
+                    comment=text("comment"),
+                    sequence=to_int(data.get("notification_seq")),
+                    # 批准这条请求时要把它原样回传
+                    is_filtered=bool(data.get("is_filtered")),
+                ),
                 **common,
             )
 
-        case "group_invited_join_request" | "group_invitation":
-            # 都是「机器人被邀请进群」，只是通知时机和序号字段名不同
-            return GroupInviteRequestEvent(
-                group_id=group_id,
-                invitor_id=sender_id,
-                comment=text("comment"),
-                flag=text("initiator_uid"),
-                sequence=to_int(
-                    data.get("notification_seq") or data.get("invitation_seq")
+        case "group_invited_join_request":
+            # 群成员邀请他人入群：要进群的是 target_user_id，initiator_id 是
+            # 邀请者。语义同 OneBot 的 sub_type=add，所以也归 GroupJoinRequestEvent
+            return GroupJoinRequestEvent(
+                request=GroupJoinRequest(
+                    group_id=group_id,
+                    user_id=to_int(data.get("target_user_id")),
+                    invitor_id=to_int(data.get("initiator_id")),
+                    sequence=to_int(data.get("notification_seq")),
                 ),
-                source_group_id=to_int(data.get("source_group_id")),
+                **common,
+            )
+
+        case "group_invitation":
+            # 他人邀请**机器人自身**入群：批准走的是独立 API，凭据是
+            # invitation_seq 而不是 notification_seq
+            return GroupInviteRequestEvent(
+                request=GroupInviteRequest(
+                    group_id=group_id,
+                    invitor_id=to_int(data.get("initiator_id")),
+                    sequence=to_int(data.get("invitation_seq")),
+                    source_group_id=to_int(data.get("source_group_id")),
+                ),
                 **common,
             )
 
@@ -353,7 +380,8 @@ def _decode_sender(data: dict[str, Any], scene: MessageScene, sender_id: int) ->
             "user_id": sender_id,
             "nickname": str(raw.get("nickname") or ""),
             "card": str(raw.get("card") or ""),
-            "role": str(raw.get("role") or ""),
+            # 私聊的 sender 里没有 role，给 None 而不是空串
+            "role": raw.get("role") or None,
             "title": str(raw.get("title") or ""),
         }
     )
@@ -381,14 +409,29 @@ def _decode_segment(data: Any, conversation: ConversationRef) -> Segment:
         case "text":
             return Text.model_validate({**fields, "raw": raw})
         case "mention":
-            return At.model_validate({**fields, "raw": raw})
+            # name 是 Milky 1.2 给的显示名（已去掉 @ 前缀），OneBot 不给
+            return At.model_validate({**fields, "raw": raw, "name": text("name")})
         case "mention_all":
             return At(raw=raw)
         case "reply":
             ref = MessageRef(
                 conversation=conversation, seq=to_int(fields.get("message_seq"))
             )
-            return Reply.model_validate({**fields, "raw": raw, "ref": ref})
+            return Reply.model_validate(
+                {
+                    **fields,
+                    "raw": raw,
+                    "ref": ref,
+                    # Milky 1.2 起顺带带回被引用消息的内容与发送者，省一次查询
+                    "content": [
+                        _decode_segment(item, conversation)
+                        for item in _as_list(fields.get("segments"))
+                    ],
+                    "sender_id": to_int(fields.get("sender_id")),
+                    "sender_name": text("sender_name"),
+                    "time": to_int(fields.get("time")),
+                }
+            )
         case "forward":
             # 收到的是引用，内容要另外调 get_forwarded_messages —— 见 MilkyForward.fetch
             preview = fields.get("preview")
@@ -448,6 +491,8 @@ def _media_fields(seg_type: str, fields: dict[str, Any]) -> dict[str, Any]:
             "summary": str(fields.get("summary") or ""),
             "width": _int_or_none(fields.get("width")),
             "height": _int_or_none(fields.get("height")),
+            # Milky 给的就是语义值（normal / sticker），原样收下
+            "sub_type": ImageSubType(fields.get("sub_type") or ImageSubType.NORMAL),
         }
     if seg_type == "record":
         return {"duration": to_int(fields.get("duration"))}
@@ -461,6 +506,7 @@ def _media_fields(seg_type: str, fields: dict[str, Any]) -> dict[str, Any]:
         return {
             "name": str(fields.get("file_name") or ""),
             "size": to_int(fields.get("file_size")),
+            "file_hash": str(fields.get("file_hash") or ""),
         }
     return {}
 

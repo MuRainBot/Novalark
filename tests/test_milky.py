@@ -568,9 +568,13 @@ def test_milky_only_events():
     assert reaction.ref.seq == 42
 
 
-def test_join_request_and_invite_are_different_events():
-    """别人申请进群、和机器人被邀请进群，是两个事件类。"""
-    request = decode_event(
+def test_joining_a_group_is_one_event_however_you_got_there():
+    """自己申请、被群成员邀请 —— 都是「有人要进群」，同一个事件类。
+
+    两者在 Milky 靠 ``invitor_id`` 区分（批准时 ``notification_type`` 不同），
+    在 OneBot 一律是 ``sub_type=add``，不区分。
+    """
+    join = decode_event(
         _notice(
             "group_join_request",
             group_id=12345,
@@ -579,22 +583,34 @@ def test_join_request_and_invite_are_different_events():
             notification_seq=7,
         )
     )
-    assert isinstance(request, GroupJoinRequestEvent)
-    assert request.group_id == 12345
-    assert request.user_id == 999
-    assert request.sequence == 7
+    assert isinstance(join, GroupJoinRequestEvent)
+    assert join.group_id == 12345
+    assert join.request.user_id == 999
+    assert join.request.invitor_id == 0  # 自己申请的
+    assert join.request.sequence == 7
 
-    invite = decode_event(
-        _notice("group_invited_join_request", group_id=12345, initiator_id=888,
-                notification_seq=3)
+    invited = decode_event(
+        _notice(
+            "group_invited_join_request",
+            group_id=12345,
+            initiator_id=888,
+            target_user_id=666,
+            notification_seq=3,
+        )
     )
-    assert isinstance(invite, GroupInviteRequestEvent)
-    assert invite.invitor_id == 888
-    assert invite.sequence == 3
+    assert isinstance(invited, GroupJoinRequestEvent)
+    # 要进群的是被邀请者，不是邀请者
+    assert invited.request.user_id == 666
+    assert invited.request.invitor_id == 888
+    assert invited.request.sequence == 3
 
 
-def test_invitation_notice_is_the_same_event_as_an_invite_request():
-    """``group_invitation`` 只是通知时机不同，同样是「等着批的邀请」。"""
+def test_being_invited_into_a_group_is_its_own_event():
+    """机器人**自己被**邀请进群：和「有人要进群」不是一回事。
+
+    批准走的也不是同一组 API —— ``accept_group_invitation`` 认的是
+    ``invitation_seq``，不是 ``notification_seq``。
+    """
     invitation = decode_event(
         _notice(
             "group_invitation",
@@ -605,6 +621,6 @@ def test_invitation_notice_is_the_same_event_as_an_invite_request():
         )
     )
     assert isinstance(invitation, GroupInviteRequestEvent)
-    assert invitation.invitor_id == 888
-    assert invitation.sequence == 3
-    assert invitation.source_group_id == 777
+    assert invitation.request.invitor_id == 888
+    assert invitation.request.sequence == 3
+    assert invitation.request.source_group_id == 777

@@ -19,14 +19,18 @@ from ..matcher.dispatch import emit as fanout
 from ..model.actions import ActionError, ActionResult
 from ..model.entities import (
     Friend,
+    FriendRequest,
     Group,
     GroupAnnouncement,
     GroupFile,
     GroupHonor,
     GroupMember,
+    GroupRequest,
+    ImplInfo,
     User,
 )
-from ..model.events import Event, FriendRequestEvent, GroupRequestEvent
+from ..model.enums import ActionStatus, HonorType
+from ..model.events import Event
 from ..model.message import Message, RichText
 from ..model.refs import ConversationRef, MessageRef
 from ..model.segments import URL_SCHEMES, ForwardNode, MediaSegment, UnresolvableUri
@@ -105,7 +109,7 @@ class Adapter(ABC):
             result = await self._call(action, params)
         except Exception as exc:
             logger.debug(f"← {action} 出错: {exc!r}", exc_info=True)
-            return ActionResult(status="failed", retcode=-1, message=repr(exc))
+            return ActionResult(status=ActionStatus.FAILED, retcode=-1, message=repr(exc))
         return result
 
     async def call_raw(self, action: str, params: dict[str, Any] | None = None) -> Any:
@@ -281,9 +285,135 @@ class Adapter(ABC):
         """取群文件列表。"""
         raise UnsupportedAction("取群文件", self.name)
 
-    async def get_honor(self, group_id: int, honor_type: str = "") -> list[GroupHonor]:
-        """取群荣誉（龙王、群聊之火…）。"""
+    async def get_honor(
+        self, group_id: int, honor_type: HonorType | None = None
+    ) -> list[GroupHonor]:
+        """取群荣誉（龙王、群聊之火…）。``honor_type`` 留空取全部。"""
         raise UnsupportedAction("取群荣誉", self.name)
+
+    # ── 群文件 ─────────────────────────────────────────────
+    #
+    # 上传/下载的 ``uri`` 都是内容地址，不是协议句柄 —— 和媒体段同一个约定。
+
+    async def upload_group_file(
+        self, group_id: int, uri: str, name: str, *, folder_id: str = "/"
+    ) -> str:
+        """上传群文件，返回 ``file_id``。"""
+        raise UnsupportedAction("上传群文件", self.name)
+
+    async def upload_private_file(self, user_id: int, uri: str, name: str) -> str:
+        """上传私聊文件，返回 ``file_id``。"""
+        raise UnsupportedAction("上传私聊文件", self.name)
+
+    async def get_group_file_url(self, group_id: int, file_id: str) -> str:
+        """取群文件的下载链接。"""
+        raise UnsupportedAction("取群文件下载链接", self.name)
+
+    async def get_private_file_url(
+        self,
+        user_id: int,
+        file_id: str,
+        file_hash: str = "",
+        *,
+        is_self_send: bool = False,
+    ) -> str:
+        """取私聊文件的下载链接。
+
+        ``file_hash`` 是文件的 TriSHA1，见 ``File.file_hash`` —— 只有 Milky
+        对私聊文件给，拿不到就留空。
+        """
+        raise UnsupportedAction("取私聊文件下载链接", self.name)
+
+    async def create_group_folder(self, group_id: int, name: str) -> str:
+        """建群文件夹，返回 ``folder_id``。"""
+        raise UnsupportedAction("建群文件夹", self.name)
+
+    async def rename_group_folder(
+        self, group_id: int, folder_id: str, name: str
+    ) -> None:
+        """重命名群文件夹。"""
+        raise UnsupportedAction("重命名群文件夹", self.name)
+
+    async def delete_group_folder(self, group_id: int, folder_id: str) -> None:
+        """删群文件夹。"""
+        raise UnsupportedAction("删群文件夹", self.name)
+
+    async def delete_group_file(self, group_id: int, file_id: str) -> None:
+        """删群文件。"""
+        raise UnsupportedAction("删群文件", self.name)
+
+    async def move_group_file(
+        self,
+        group_id: int,
+        file_id: str,
+        *,
+        folder_id: str = "/",
+        target_folder_id: str = "/",
+    ) -> None:
+        """把群文件挪到另一个文件夹。"""
+        raise UnsupportedAction("移动群文件", self.name)
+
+    async def rename_group_file(
+        self, group_id: int, file_id: str, name: str, *, folder_id: str = "/"
+    ) -> None:
+        """重命名群文件。"""
+        raise UnsupportedAction("重命名群文件", self.name)
+
+    async def persist_group_file(self, group_id: int, file_id: str) -> None:
+        """把群文件转存为永久文件。"""
+        raise UnsupportedAction("转存群文件", self.name)
+
+    # ── 会话置顶 ───────────────────────────────────────────
+
+    async def get_pinned(self) -> "tuple[list[Friend], list[Group]]":
+        """取置顶的会话，``(好友, 群)``。"""
+        raise UnsupportedAction("取置顶会话", self.name)
+
+    async def set_pinned(
+        self, conversation: ConversationRef, pinned: bool = True
+    ) -> None:
+        """置顶或取消置顶一个会话。"""
+        raise UnsupportedAction("置顶会话", self.name)
+
+    # ── 实现端与账号 ───────────────────────────────────────
+
+    async def get_impl_info(self) -> ImplInfo:
+        """取实现端自己的信息（名字、版本、实现的协议版本…）。"""
+        raise UnsupportedAction("取实现端信息", self.name)
+
+    async def get_cookies(self, domain: str) -> str:
+        """取某个域名下的 Cookies。"""
+        raise UnsupportedAction("取 Cookies", self.name)
+
+    async def get_csrf_token(self) -> str:
+        """取 CSRF Token。"""
+        raise UnsupportedAction("取 CSRF Token", self.name)
+
+    async def get_custom_faces(self) -> list[str]:
+        """取自定义表情的 URL 列表。"""
+        raise UnsupportedAction("取自定义表情", self.name)
+
+    async def get_friend_info(self, user_id: int) -> Friend:
+        """取好友资料（带备注、分组），比 :meth:`get_user_info` 更贴近好友列表。"""
+        raise UnsupportedAction("取好友资料", self.name)
+
+    # ── 待处理的请求 ───────────────────────────────────────
+
+    async def get_friend_requests(
+        self, limit: int = 20, *, filtered: bool = False
+    ) -> list[FriendRequest]:
+        """取好友申请。拿到手就能交给 :meth:`approve_friend_request`。"""
+        raise UnsupportedAction("取好友申请列表", self.name)
+
+    async def get_group_notifications(
+        self, limit: int = 20, *, filtered: bool = False
+    ) -> list[dict[str, Any]]:
+        """取群通知（入群申请、管理员变更…），按序列号从新到旧。
+
+        通知的种类太多（入群请求、邀请、踢人、退群、管理员变更），各类型用到
+        的字段不一样，这里原样给协议记录的字段，按 ``type`` 判别。
+        """
+        raise UnsupportedAction("取群通知列表", self.name)
 
     # ── 好友与账号 ─────────────────────────────────────────
 
@@ -318,15 +448,15 @@ class Adapter(ABC):
     # ── 请求处理 ───────────────────────────────────────────
 
     async def approve_friend_request(
-        self, request: "FriendRequestEvent", approve: bool = True, remark: str = ""
+        self, request: FriendRequest, approve: bool = True, remark: str = ""
     ) -> None:
-        """同意或拒绝好友申请。"""
+        """同意或拒绝一条好友申请。"""
         raise UnsupportedAction("处理好友申请", self.name)
 
     async def approve_group_request(
-        self, request: GroupRequestEvent, approve: bool = True, reason: str = ""
+        self, request: GroupRequest, approve: bool = True, reason: str = ""
     ) -> None:
-        """同意或拒绝一条群请求（别人申请进群 / 机器人被邀请进群）。"""
+        """同意或拒绝一条群请求（别人要进群 / 机器人被邀请进群）。"""
         raise UnsupportedAction("处理群请求", self.name)
 
     # ── 事件出口 ───────────────────────────────────────────

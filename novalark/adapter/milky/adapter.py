@@ -11,16 +11,23 @@ from ...log import get_logger
 from ...model.actions import ActionResult
 from ...model.entities import (
     Friend,
+    FriendRequest,
     Group,
+    GroupInviteRequest,
+    GroupJoinRequest,
+    GroupRequest,
     GroupAnnouncement,
     GroupFile,
     GroupMember,
+    ImplInfo,
     User,
 )
 from ...model.entities import Sender
+from ...model.enums import ActionStatus, RequestState
 from ...model.events import (
     FriendRequestEvent,
     GroupInviteRequestEvent,
+    GroupJoinRequestEvent,
     GroupRequestEvent,
 )
 from ...model.message import Message, RichText
@@ -134,10 +141,12 @@ class MilkyAdapter(Adapter):
         payload = await self.call_raw(action, params)
         if not isinstance(payload, dict):
             return ActionResult(
-                status="failed", retcode=-1, message=f"响应不是对象: {payload!r}"
+                status=ActionStatus.FAILED,
+                retcode=-1,
+                message=f"响应不是对象: {payload!r}",
             )
         return ActionResult(
-            status=str(payload.get("status") or "ok"),
+            status=ActionStatus(payload.get("status") or ActionStatus.OK),
             retcode=to_int(payload.get("retcode")),
             data=payload.get("data"),
             message=str(payload.get("message") or ""),
@@ -441,6 +450,215 @@ class MilkyAdapter(Adapter):
             GroupFile.model_validate(item) for item in _unbox(result.unwrap(), "files")
         ]
 
+    # ── 群文件 ─────────────────────────────────────────────
+
+    async def upload_group_file(
+        self, group_id: int, uri: str, name: str, *, folder_id: str = "/"
+    ) -> str:
+        result = await self.call(
+            "upload_group_file",
+            {
+                "group_id": group_id,
+                "parent_folder_id": folder_id,
+                "file_uri": uri,
+                "file_name": name,
+            },
+        )
+        return _scalar(result.unwrap(), "file_id")
+
+    async def upload_private_file(self, user_id: int, uri: str, name: str) -> str:
+        result = await self.call(
+            "upload_private_file",
+            {"user_id": user_id, "file_uri": uri, "file_name": name},
+        )
+        return _scalar(result.unwrap(), "file_id")
+
+    async def get_group_file_url(self, group_id: int, file_id: str) -> str:
+        result = await self.call(
+            "get_group_file_download_url", {"group_id": group_id, "file_id": file_id}
+        )
+        return _scalar(result.unwrap(), "download_url")
+
+    async def get_private_file_url(
+        self,
+        user_id: int,
+        file_id: str,
+        file_hash: str = "",
+        *,
+        is_self_send: bool = False,
+    ) -> str:
+        result = await self.call(
+            "get_private_file_download_url",
+            {
+                "user_id": user_id,
+                "file_id": file_id,
+                "file_hash": file_hash,
+                "is_self_send": is_self_send,
+            },
+        )
+        return _scalar(result.unwrap(), "download_url")
+
+    async def create_group_folder(self, group_id: int, name: str) -> str:
+        result = await self.call(
+            "create_group_folder", {"group_id": group_id, "folder_name": name}
+        )
+        return _scalar(result.unwrap(), "folder_id")
+
+    async def rename_group_folder(
+        self, group_id: int, folder_id: str, name: str
+    ) -> None:
+        (
+            await self.call(
+                "rename_group_folder",
+                {"group_id": group_id, "folder_id": folder_id, "new_folder_name": name},
+            )
+        ).unwrap()
+
+    async def delete_group_folder(self, group_id: int, folder_id: str) -> None:
+        (
+            await self.call(
+                "delete_group_folder", {"group_id": group_id, "folder_id": folder_id}
+            )
+        ).unwrap()
+
+    async def delete_group_file(self, group_id: int, file_id: str) -> None:
+        (
+            await self.call(
+                "delete_group_file", {"group_id": group_id, "file_id": file_id}
+            )
+        ).unwrap()
+
+    async def move_group_file(
+        self,
+        group_id: int,
+        file_id: str,
+        *,
+        folder_id: str = "/",
+        target_folder_id: str = "/",
+    ) -> None:
+        (
+            await self.call(
+                "move_group_file",
+                {
+                    "group_id": group_id,
+                    "file_id": file_id,
+                    "parent_folder_id": folder_id,
+                    "target_folder_id": target_folder_id,
+                },
+            )
+        ).unwrap()
+
+    async def rename_group_file(
+        self, group_id: int, file_id: str, name: str, *, folder_id: str = "/"
+    ) -> None:
+        (
+            await self.call(
+                "rename_group_file",
+                {
+                    "group_id": group_id,
+                    "file_id": file_id,
+                    "parent_folder_id": folder_id,
+                    "new_file_name": name,
+                },
+            )
+        ).unwrap()
+
+    async def persist_group_file(self, group_id: int, file_id: str) -> None:
+        (
+            await self.call(
+                "persist_group_file", {"group_id": group_id, "file_id": file_id}
+            )
+        ).unwrap()
+
+    # ── 会话置顶 ───────────────────────────────────────────
+
+    async def get_pinned(self) -> tuple[list[Friend], list[Group]]:
+        data = (await self.call("get_peer_pins")).unwrap()
+        return (
+            [Friend.model_validate(item) for item in _unbox(data, "friends")],
+            [_to_group(item) for item in _unbox(data, "groups")],
+        )
+
+    async def set_pinned(
+        self, conversation: ConversationRef, pinned: bool = True
+    ) -> None:
+        (
+            await self.call(
+                "set_peer_pin",
+                {
+                    "message_scene": conversation.scene.value,
+                    "peer_id": conversation.peer_id,
+                    "is_pinned": pinned,
+                },
+            )
+        ).unwrap()
+
+    # ── 实现端与账号 ───────────────────────────────────────
+
+    async def get_impl_info(self) -> ImplInfo:
+        data = (await self.call("get_impl_info")).unwrap()
+        raw = data if isinstance(data, dict) else {}
+        return ImplInfo.model_validate(
+            {
+                **raw,
+                "name": str(raw.get("impl_name") or ""),
+                "version": str(raw.get("impl_version") or ""),
+                "protocol_version": str(raw.get("milky_version") or ""),
+                "protocol_type": raw.get("qq_protocol_type") or None,
+            }
+        )
+
+    async def get_cookies(self, domain: str) -> str:
+        data = (await self.call("get_cookies", {"domain": domain})).unwrap()
+        return _scalar(data, "cookies")
+
+    async def get_csrf_token(self) -> str:
+        data = (await self.call("get_csrf_token")).unwrap()
+        return _scalar(data, "csrf_token")
+
+    async def get_custom_faces(self) -> list[str]:
+        data = (await self.call("get_custom_face_url_list")).unwrap()
+        return [str(item) for item in _unbox(data, "urls")]
+
+    async def get_friend_info(self, user_id: int) -> Friend:
+        result = await self.call("get_friend_info", {"user_id": user_id})
+        return Friend.model_validate(_unbox_one(result.unwrap(), "friend"))
+
+    # ── 待处理的请求 ───────────────────────────────────────
+
+    async def get_friend_requests(
+        self, limit: int = 20, *, filtered: bool = False
+    ) -> list[FriendRequest]:
+        result = await self.call(
+            "get_friend_requests", {"limit": limit, "is_filtered": filtered}
+        )
+        return [
+            FriendRequest(
+                user_id=to_int(item.get("initiator_id")),
+                # 处理时需要 uid 当凭据，和事件那条路一样放进 flag
+                flag=str(item.get("initiator_uid") or ""),
+                comment=str(item.get("comment") or ""),
+                via=str(item.get("via") or ""),
+                time=to_int(item.get("time")),
+                is_filtered=bool(item.get("is_filtered")),
+                state=item.get("state") or RequestState.PENDING,
+            )
+            for item in _unbox(result.unwrap(), "requests")
+            if isinstance(item, dict)
+        ]
+
+    async def get_group_notifications(
+        self, limit: int = 20, *, filtered: bool = False
+    ) -> list[dict[str, Any]]:
+        result = await self.call(
+            "get_group_notifications", {"limit": limit, "is_filtered": filtered}
+        )
+        return [
+            item
+            for item in _unbox(result.unwrap(), "notifications")
+            if isinstance(item, dict)
+        ]
+
     # ── 好友与账号 ─────────────────────────────────────────
 
     async def delete_friend(self, user_id: int) -> None:
@@ -467,10 +685,13 @@ class MilkyAdapter(Adapter):
     # ── 请求处理 ───────────────────────────────────────────
 
     async def approve_friend_request(
-        self, request: FriendRequestEvent, approve: bool = True, remark: str = ""
+        self, request: FriendRequest, approve: bool = True, remark: str = ""
     ) -> None:
         # Milky 认 uid 不认 flag，解码时把 uid 存进了 flag
-        params: dict[str, Any] = {"initiator_uid": request.flag}
+        params: dict[str, Any] = {
+            "initiator_uid": request.flag,
+            "is_filtered": request.is_filtered,
+        }
         if approve:
             (await self.call("accept_friend_request", params)).unwrap()
             return
@@ -479,20 +700,33 @@ class MilkyAdapter(Adapter):
         (await self.call("reject_friend_request", params)).unwrap()
 
     async def approve_group_request(
-        self, request: GroupRequestEvent, approve: bool = True, reason: str = ""
+        self, request: GroupRequest, approve: bool = True, reason: str = ""
     ) -> None:
-        params: dict[str, Any] = {
-            "group_id": request.group_id,
-            "notification_seq": request.sequence,
-            "notification_type": (
-                "invited_join_request"
-                if isinstance(request, GroupInviteRequestEvent)
-                else "join_request"
-            ),
-        }
-        action = "accept_group_request" if approve else "reject_group_request"
-        if not approve and reason:
-            params["reason"] = reason
+        params: dict[str, Any]
+        if isinstance(request, GroupJoinRequest):
+            action = "accept_group_request" if approve else "reject_group_request"
+            params = {
+                "group_id": request.group_id,
+                "notification_seq": request.sequence,
+                # 自己申请 vs 被群成员邀请，协议要的 notification_type 不同
+                "notification_type": (
+                    "invited_join_request" if request.invitor_id else "join_request"
+                ),
+                # 收到时是什么就回传什么，协议靠它定位这条请求
+                "is_filtered": request.is_filtered,
+            }
+            if not approve and reason:
+                params["reason"] = reason
+        else:
+            # 机器人自己被邀请入群：独立的一组 API，凭据是 invitation_seq，
+            # 而且没有 reason 参数
+            action = (
+                "accept_group_invitation" if approve else "reject_group_invitation"
+            )
+            params = {
+                "group_id": request.group_id,
+                "invitation_seq": request.sequence,
+            }
         (await self.call(action, params)).unwrap()
 
 
@@ -529,6 +763,15 @@ def _unbox_one(data: Any, key: str) -> dict[str, Any]:
             return value
         return data
     return {}
+
+
+def _scalar(data: Any, key: str) -> str:
+    """标量结果。Milky 同样把返回值包成 ``{"key": value}``。"""
+    if isinstance(data, dict):
+        value = data.get(key)
+        if value is not None:
+            return str(value)
+    return ""
 
 
 def _to_member(group_id: int, user_id: int, data: Any) -> GroupMember:

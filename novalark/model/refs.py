@@ -7,21 +7,9 @@
 
 from __future__ import annotations
 
-from enum import StrEnum
-
 from pydantic import BaseModel, ConfigDict
 
-
-class MessageScene(StrEnum):
-    """会话场景。
-
-    TEMP 与 GROUP 分开：临时会话的 peer 是用户 QQ 号，但它的上下文属于某个群。
-    """
-
-    FRIEND = "friend"
-    GROUP = "group"
-    TEMP = "temp"
-
+from .enums import MessageScene
 
 #: 场景的中文名，给日志用。
 _SCENE_LABEL = {

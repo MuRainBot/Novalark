@@ -420,7 +420,7 @@ def test_requests_are_typed_with_their_flag():
         }
     )
     assert isinstance(friend, FriendRequestEvent)
-    assert friend.flag == "f1"
+    assert friend.request.flag == "f1"  # 批准时要用
 
     group = decode_event(
         {
@@ -437,7 +437,7 @@ def test_requests_are_typed_with_their_flag():
     )
     assert isinstance(group, GroupJoinRequestEvent)
     assert group.group_id == 12345
-    assert group.user_id == 999
+    assert group.request.user_id == 999
 
     # sub_type=invite 是「机器人被邀请进群」，另一个事件类
     invite = decode_event(
@@ -454,5 +454,5 @@ def test_requests_are_typed_with_their_flag():
     )
     assert isinstance(invite, GroupInviteRequestEvent)
     assert invite.group_id == 12345
-    assert invite.invitor_id == 888
-    assert invite.flag == "f3"  # 批准时要用
+    assert invite.request.invitor_id == 888
+    assert invite.request.flag == "f3"  # 批准时要用

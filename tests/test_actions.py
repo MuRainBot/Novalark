@@ -19,11 +19,15 @@ from novalark.model import (
     ActionError,
     At,
     ConversationRef,
+    FriendRequest,
     FriendRequestEvent,
+    GroupInviteRequest,
     GroupInviteRequestEvent,
+    GroupJoinRequest,
     GroupJoinRequestEvent,
     MessageRef,
     MessageScene,
+    RequestState,
     RichText,
     Text,
 )
@@ -325,19 +329,20 @@ def test_onebot_still_covers_the_standard_ones(scenario):
     scenario(body)
 
 
-def test_approve_request_takes_the_event_not_a_flag(scenario):
-    """审批接口接收事件对象（OneBot 带 flag，Milky 带 uid）。"""
+def test_approve_request_takes_the_request_not_a_bare_flag(scenario):
+    """审批接口收的是「申请」本身，不是散开的 flag —— OneBot 和 Milky 的凭据
+    长得不一样（flag / uid），由适配器去认。"""
 
     async def body():
         rec = Recorder()
         bot = (await _onebot(rec)).bot
-        request = FriendRequestEvent(user_id=999, flag="flag-1")
+        request = FriendRequest(user_id=999, flag="flag-1")
 
         await bot.approve_friend_request(request)
         assert rec.action == "set_friend_add_request"
         assert rec.params == {"flag": "flag-1", "approve": True, "remark": ""}
 
-        group = GroupJoinRequestEvent(group_id=12345, flag="flag-2")
+        group = GroupJoinRequest(group_id=12345, flag="flag-2")
         await bot.approve_group_request(group, approve=False, reason="不加")
         assert rec.action == "set_group_add_request"
         assert rec.params["approve"] is False
@@ -353,19 +358,21 @@ def test_onebot_approves_with_the_matching_sub_type(scenario):
         rec = Recorder()
         bot = (await _onebot(rec)).bot
 
-        await bot.approve_group_request(GroupJoinRequestEvent(group_id=1, flag="f"))
+        await bot.approve_group_request(GroupJoinRequest(group_id=1, flag="f"))
         assert rec.params["sub_type"] == "add"
 
-        await bot.approve_group_request(
-            GroupInviteRequestEvent(group_id=1, flag="f")
-        )
+        await bot.approve_group_request(GroupInviteRequest(group_id=1, flag="f"))
         assert rec.params["sub_type"] == "invite"
 
     scenario(body)
 
 
 def test_milky_approves_with_uid_and_the_right_notification_type(scenario):
-    """Milky 认 uid 不认 flag；申请进群和邀请进群是两种 notification_type。
+    """Milky 认 uid 不认 flag；群请求按语义分走两组 API。
+
+    - 自己申请 / 被群成员邀请：都走 ``accept_group_request``，靠
+      ``notification_type`` 区分来源
+    - 机器人自己被邀请：走 ``accept_group_invitation``，凭据是 ``invitation_seq``
 
     这条以前完全没有覆盖 —— 「Milky 好友申请永远批不了」（uid 恒为空）就是
     从这个洞里漏出去的。
@@ -375,26 +382,47 @@ def test_milky_approves_with_uid_and_the_right_notification_type(scenario):
         rec = Recorder()
         bot = (await _milky(rec)).bot
 
-        await bot.approve_friend_request(FriendRequestEvent(user_id=999, flag="uid-1"))
+        await bot.approve_friend_request(FriendRequest(user_id=999, flag="uid-1"))
         assert rec.action == "accept_friend_request"
-        assert rec.params == {"initiator_uid": "uid-1"}
+        assert rec.params == {"initiator_uid": "uid-1", "is_filtered": False}
 
         await bot.approve_friend_request(
-            FriendRequestEvent(user_id=999, flag="uid-2"), approve=False, remark="不加"
+            FriendRequest(user_id=999, flag="uid-2"), approve=False, remark="不加"
         )
         assert rec.action == "reject_friend_request"
-        assert rec.params == {"initiator_uid": "uid-2", "reason": "不加"}
+        assert rec.params == {
+            "initiator_uid": "uid-2",
+            "is_filtered": False,
+            "reason": "不加",
+        }
 
+        # 自己申请进群
+        await bot.approve_group_request(GroupJoinRequest(group_id=1, sequence=7))
+        assert rec.action == "accept_group_request"
+        assert rec.params == {
+            "group_id": 1,
+            "notification_seq": 7,
+            "notification_type": "join_request",
+            "is_filtered": False,
+        }
+
+        # 被群成员邀请进群：同一个 API，notification_type 不同
         await bot.approve_group_request(
-            GroupJoinRequestEvent(group_id=1, sequence=7)
+            GroupJoinRequest(group_id=1, sequence=9, invitor_id=888)
         )
         assert rec.action == "accept_group_request"
-        assert rec.params["notification_type"] == "join_request"
+        assert rec.params["notification_type"] == "invited_join_request"
+
+        # 机器人自己被邀请：另一组 API，凭据是 invitation_seq
+        await bot.approve_group_request(GroupInviteRequest(group_id=1, sequence=8))
+        assert rec.action == "accept_group_invitation"
+        assert rec.params == {"group_id": 1, "invitation_seq": 8}
 
         await bot.approve_group_request(
-            GroupInviteRequestEvent(group_id=1, sequence=8)
+            GroupInviteRequest(group_id=1, sequence=8), approve=False
         )
-        assert rec.params["notification_type"] == "invited_join_request"
+        assert rec.action == "reject_group_invitation"
+        assert rec.params == {"group_id": 1, "invitation_seq": 8}
 
     scenario(body)
 
@@ -463,7 +491,7 @@ def test_action_failure_raises_instead_of_going_quiet(scenario):
         for call in (
             mbot.mute_member(12345, 999, 600),
             mbot.set_essence(MessageRef(conversation=GROUP, seq=1)),
-            mbot.approve_friend_request(FriendRequestEvent(flag="uid")),
+            mbot.approve_friend_request(FriendRequest(flag="uid")),
         ):
             with pytest.raises(ActionError, match="权限不足"):
                 await call
@@ -499,5 +527,221 @@ def test_milky_rejects_group_only_actions_on_a_private_conversation(scenario):
             await bot.set_essence(MessageRef(conversation=FRIEND, seq=1))
 
         assert rec.calls == []  # 一个请求都没发出去
+
+    scenario(body)
+
+
+# ── 群文件 ─────────────────────────────────────────────────
+
+
+def test_milky_file_actions_use_the_protocol_field_names(scenario):
+    """Milky 的参数名(`file_uri` / `parent_folder_id`…)和模型层的签名对不上，
+    这一层映射错了表现就是"传上去的文件名不对/传不上去"。"""
+
+    async def body():
+        rec = Recorder(data={"file_id": "f1", "download_url": "http://d/1"})
+        bot = (await _milky(rec)).bot
+
+        assert await bot.upload_group_file(1, "file:///tmp/a.txt", "a.txt") == "f1"
+        assert rec.params == {
+            "group_id": 1,
+            "parent_folder_id": "/",
+            "file_uri": "file:///tmp/a.txt",
+            "file_name": "a.txt",
+        }
+
+        assert await bot.get_group_file_url(1, "f1") == "http://d/1"
+        assert rec.params == {"group_id": 1, "file_id": "f1"}
+
+        # 私聊下载要带 TriSHA1，就是 File.file_hash 那个
+        assert await bot.get_private_file_url(2, "f1", "hash1") == "http://d/1"
+        assert rec.params == {
+            "user_id": 2,
+            "file_id": "f1",
+            "file_hash": "hash1",
+            "is_self_send": False,
+        }
+
+        await bot.move_group_file(1, "f1", target_folder_id="dir1")
+        assert rec.params == {
+            "group_id": 1,
+            "file_id": "f1",
+            "parent_folder_id": "/",
+            "target_folder_id": "dir1",
+        }
+
+    scenario(body)
+
+
+def test_milky_folder_actions_return_the_new_id(scenario):
+    async def body():
+        rec = Recorder(data={"folder_id": "dir1"})
+        bot = (await _milky(rec)).bot
+
+        assert await bot.create_group_folder(1, "资料") == "dir1"
+        assert rec.params == {"group_id": 1, "folder_name": "资料"}
+
+        await bot.rename_group_folder(1, "dir1", "新资料")
+        assert rec.params == {
+            "group_id": 1,
+            "folder_id": "dir1",
+            "new_folder_name": "新资料",
+        }
+
+    scenario(body)
+
+
+def test_onebot_has_no_file_or_pin_actions(scenario):
+    """OneBot 侧只按标准协议做 —— 没实现的能力要明确报错，不能静默当成成功。"""
+
+    async def body():
+        rec = Recorder()
+        bot = (await _onebot(rec)).bot
+
+        for call in (
+            bot.upload_group_file(1, "file:///tmp/a.txt", "a.txt"),
+            bot.persist_group_file(1, "f1"),
+            bot.get_pinned(),
+            bot.get_friend_requests(),
+        ):
+            with pytest.raises(UnsupportedAction):
+                await call
+
+        assert rec.calls == []  # 一个请求都没发出去
+
+    scenario(body)
+
+
+def test_onebot_credential_actions_follow_the_standard(scenario):
+    """get_cookies / get_csrf_token / get_version_info 是 OneBot **标准**里的，
+    不能因为 Milky 那边也有就当成扩展挡掉。"""
+
+    async def body():
+        rec = Recorder(data={"cookies": "a=1", "token": 12345, "app_name": "impl"})
+        bot = (await _onebot(rec)).bot
+
+        assert await bot.get_cookies("qun.qq.com") == "a=1"
+        assert rec.action == "get_cookies"
+        assert rec.params == {"domain": "qun.qq.com"}
+
+        # 标准里字段叫 token，Milky 那边叫 csrf_token
+        assert await bot.get_csrf_token() == "12345"
+        assert rec.action == "get_csrf_token"
+
+        info = await bot.get_impl_info()
+        assert rec.action == "get_version_info"
+        assert info.name == "impl"
+
+    scenario(body)
+
+
+# ── 置顶与实现端信息 ───────────────────────────────────────
+
+
+def test_milky_reads_pins_and_impl_info(scenario):
+    async def body():
+        rec = Recorder(
+            data={"friends": [{"user_id": 7}], "groups": [{"group_id": 8}]}
+        )
+        bot = (await _milky(rec)).bot
+
+        friends, groups = await bot.get_pinned()
+        assert [f.user_id for f in friends] == [7]
+        assert [g.group_id for g in groups] == [8]
+
+        await bot.set_pinned(ConversationRef(scene=MessageScene.GROUP, peer_id=8), False)
+        assert rec.params == {
+            "message_scene": "group",
+            "peer_id": 8,
+            "is_pinned": False,
+        }
+
+    scenario(body)
+
+
+def test_request_events_approve_themselves(scenario):
+    """``event.approve()`` 是插件的主要写法 —— 和 ``event.reply()`` 一个路子，
+    不用把 event 递回 Bot。"""
+
+    async def body():
+        rec = Recorder()
+        bot = (await _milky(rec)).bot
+
+        request = GroupJoinRequestEvent(
+            request=GroupJoinRequest(group_id=1, sequence=7)
+        ).bind(bot)
+        await request.approve()
+        assert rec.action == "accept_group_request"
+
+        await request.reject("不加")
+        assert rec.action == "reject_group_request"
+        assert rec.params["reason"] == "不加"
+
+        friend = FriendRequestEvent(request=FriendRequest(user_id=9, flag="uid-1"))
+        await friend.bind(bot).approve("小名")
+        assert rec.action == "accept_friend_request"
+        assert rec.params["initiator_uid"] == "uid-1"
+
+    scenario(body)
+
+
+def test_milky_friend_requests_come_back_approvable(scenario):
+    """查出来的每一条和事件里的是**同一种东西**（``FriendRequest``），带着同一个
+    ``flag`` 凭据，所以拿起来就能直接交给 ``approve_friend_request``。"""
+
+    async def body():
+        rec = Recorder(
+            data={
+                "requests": [
+                    {
+                        "initiator_id": 42,
+                        "initiator_uid": "u-42",
+                        "comment": "求加",
+                        "via": "group",
+                        "state": "pending",
+                        "is_filtered": True,
+                    }
+                ]
+            }
+        )
+        bot = (await _milky(rec)).bot
+
+        requests = await bot.get_friend_requests()
+        assert len(requests) == 1
+        assert isinstance(requests[0], FriendRequest)
+        assert requests[0].user_id == 42
+        assert requests[0].flag == "u-42"  # 批的时候要用它
+        assert requests[0].state is RequestState.PENDING
+        assert requests[0].is_filtered is True
+
+        await bot.approve_friend_request(requests[0])
+        assert rec.action == "accept_friend_request"
+        assert rec.params == {"initiator_uid": "u-42", "is_filtered": True}
+
+    scenario(body)
+
+
+def test_a_request_survives_a_round_trip(scenario):
+    """申请存下来、过一阵再批 —— 序列化这一圈不能丢凭据。"""
+
+    async def body():
+        rec = Recorder()
+        bot = (await _milky(rec)).bot
+
+        saved = GroupJoinRequestEvent(
+            request=GroupJoinRequest(
+                group_id=1, sequence=7, invitor_id=888, is_filtered=True
+            )
+        ).model_dump()
+
+        restored = GroupJoinRequestEvent.model_validate(saved).bind(bot)
+        await restored.approve()
+        assert rec.action == "accept_group_request"
+        assert rec.params == {
+            "group_id": 1,
+            "notification_seq": 7,
+            "notification_type": "invited_join_request",
+            "is_filtered": True,
+        }
 
     scenario(body)

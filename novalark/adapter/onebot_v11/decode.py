@@ -9,7 +9,13 @@ from __future__ import annotations
 import re
 from typing import Any, Callable
 
-from ...model.entities import Sender
+from ...model.entities import (
+    FriendRequest,
+    GroupInviteRequest,
+    GroupJoinRequest,
+    Sender,
+)
+from ...model.enums import ImageSubType
 from ...model.events import (
     ClientStatusEvent,
     Event,
@@ -262,7 +268,7 @@ def _decode_notify(sub_type: str, data: dict[str, Any], **common: Any) -> Event:
             return GroupHonorEvent(
                 group_id=group_id,
                 user_id=user_id,
-                honor_type=str(data.get("honor_type") or ""),
+                honor_type=data.get("honor_type") or None,
                 **common,
             )
         case _:
@@ -281,9 +287,11 @@ def _decode_request(data: dict[str, Any], **common: Any) -> Event:
     match request_type:
         case "friend":
             return FriendRequestEvent(
-                user_id=to_int(data.get("user_id")),
-                comment=str(data.get("comment") or ""),
-                flag=flag,
+                request=FriendRequest(
+                    user_id=to_int(data.get("user_id")),
+                    comment=str(data.get("comment") or ""),
+                    flag=flag,
+                ),
                 **common,
             )
         case "group":
@@ -293,17 +301,21 @@ def _decode_request(data: dict[str, Any], **common: Any) -> Event:
             if sub_type == "invite":
                 # 被邀请进群，发起人是 user_id
                 return GroupInviteRequestEvent(
-                    group_id=group_id,
-                    invitor_id=to_int(data.get("user_id")),
-                    comment=comment,
-                    flag=flag,
+                    request=GroupInviteRequest(
+                        group_id=group_id,
+                        invitor_id=to_int(data.get("user_id")),
+                        comment=comment,
+                        flag=flag,
+                    ),
                     **common,
                 )
             return GroupJoinRequestEvent(
-                group_id=group_id,
-                user_id=to_int(data.get("user_id")),
-                comment=comment,
-                flag=flag,
+                request=GroupJoinRequest(
+                    group_id=group_id,
+                    user_id=to_int(data.get("user_id")),
+                    comment=comment,
+                    flag=flag,
+                ),
                 **common,
             )
         case _:
@@ -318,7 +330,7 @@ def _decode_meta(data: dict[str, Any], **common: Any) -> Event:
 
     match meta_type:
         case "lifecycle":
-            return LifecycleEvent(state=str((data.get("sub_type") or "")), **common)
+            return LifecycleEvent(state=data.get("sub_type") or None, **common)
         case "heartbeat":
             status = data.get("status")
             alive = status.get("online", True) if isinstance(status, dict) else True
@@ -380,7 +392,8 @@ def _decode_sender(raw: Any, fallback_id: Any) -> Sender:
             "user_id": to_int(data.get("user_id")) or to_int(fallback_id),
             "nickname": str(data.get("nickname") or ""),
             "card": str(data.get("card") or ""),
-            "role": str(data.get("role") or ""),
+            # 私聊的 sender 里没有 role，给 None 而不是空串
+            "role": data.get("role") or None,
             # title 也在 sender 对象里，不归一化就是个裸的原始值
             "title": str(data.get("title") or ""),
         }
@@ -543,6 +556,9 @@ def _media_fields(seg_type: str, payload: dict[str, Any]) -> dict[str, Any]:
             "summary": str(payload.get("summary") or ""),
             "width": int_or_none(payload.get("width")),
             "height": int_or_none(payload.get("height")),
+            # 标准协议没有 sub_type（go-cqhttp 等实现端自己扩展成了 int）。
+            # 这边只按标准做，就不采信实现端塞进来的值，一律当普通图片。
+            "sub_type": ImageSubType.NORMAL,
         }
     if seg_type == "record":
         return {"duration": to_int(payload.get("duration"))}

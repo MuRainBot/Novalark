@@ -48,9 +48,14 @@ def encode_segments(content: RichText) -> list[dict[str, Any]]:
 #: 只摊 model_extra 的话收进来再发出去就掉了。
 _MEDIA_FIELDS = ("summary", "width", "height", "duration", "name", "size")
 
-#: 入站专有的键。decode 把整个 ``data`` 摊进模型，``url`` 是入站的原始键
-#: （模型里叫 ``temp_url``）；不剔掉的话出站会同时带上 ``file`` 和 ``url``。
-_INCOMING_ONLY = frozenset({"url"})
+#: 入站专有的键。decode 把整个 ``data`` 摊进模型，这些键出站结构里没有；
+#: 不剔掉的话「收进来再发出去」会把它们原样回吐。
+#:
+#: ``url`` 是 OneBot 自己的（模型里叫 ``temp_url``），其余是 Milky 的入站键，
+#: 从 Milky 收到再转发过来时必须挡住。
+_INCOMING_ONLY = frozenset(
+    {"url", "resource_id", "file_id", "file_name", "file_size", "file_hash"}
+)
 
 
 def _encode_forward(seg: Forward) -> list[dict[str, Any]]:

@@ -14,9 +14,11 @@ from pydantic import (
     Field,
     SerializeAsAny,
     ValidationError,
+    field_validator,
     model_validator,
 )
 
+from .enums import ContactKind, ImageSubType, MusicKind
 from .refs import MessageRef
 
 if TYPE_CHECKING:
@@ -43,6 +45,9 @@ class Segment(BaseModel):
     ``type`` 是**模型层的语义名**，恒等于段类自己声明的那个值。协议里的段名
     （OneBot 的 ``json``、Milky 的 ``mention``）不许从这里泄漏出去 —— 判断段
     类型直接比较 ``type`` 或用 ``isinstance``，两个协议结果都一样。
+
+    ``type`` 本身不是枚举：:class:`UnknownSegment` 要原样留住没见过的段名，
+    拿枚举圈住就等于把「协议加了新段」变成解码失败。
 
     ``raw`` 是收到时的协议原文，不参与序列化，和 :class:`Event` 的同名字段
     对称。
@@ -95,13 +100,19 @@ class Text(Segment):
 
 
 class At(Segment):
-    """@某人。``user_id`` 为 ``None`` 表示 @全体，用 ``is_all`` 判断。"""
+    """@某人。``user_id`` 为 ``None`` 表示 @全体，用 ``is_all`` 判断。
+
+    ``name`` 是 Milky 给的显示名（**已经去掉 ``@`` 前缀**），OneBot 不给。
+    """
 
     type: str = "at"
     user_id: int | None = None
+    name: str = ""
 
-    def __init__(self, user_id: int | None = None, **kwargs: Any) -> None:
-        super().__init__(user_id=user_id, **kwargs)
+    def __init__(
+        self, user_id: int | None = None, name: str = "", **kwargs: Any
+    ) -> None:
+        super().__init__(user_id=user_id, name=name, **kwargs)
 
     @property
     def is_all(self) -> bool:
@@ -153,12 +164,18 @@ class MediaSegment(Segment):
 
 
 class Image(MediaSegment):
-    """图片。"""
+    """图片。
+
+    ``sub_type`` 用 Milky 的语义值（``normal`` / ``sticker`` 表情包）。OneBot
+    **标准协议没有这个字段** —— 实现端（go-cqhttp 等）自己扩展成了 int，本框架
+    不采信，从那边收到的图片恒为 ``normal``。
+    """
 
     type: str = "image"
     summary: str = ""
     width: int | None = None
     height: int | None = None
+    sub_type: ImageSubType = ImageSubType.NORMAL
 
     def __init__(
         self,
@@ -167,6 +184,7 @@ class Image(MediaSegment):
         summary: str = "",
         width: int | None = None,
         height: int | None = None,
+        sub_type: ImageSubType = ImageSubType.NORMAL,
         **kwargs: Any,
     ) -> None:
         super().__init__(
@@ -175,6 +193,7 @@ class Image(MediaSegment):
             summary=summary,
             width=width,
             height=height,
+            sub_type=sub_type,
             **kwargs,
         )
 
@@ -196,12 +215,17 @@ class Record(MediaSegment):
 
 
 class Video(MediaSegment):
-    """视频。"""
+    """视频。
+
+    ``thumb_uri`` 是发送时的封面，**只有 Milky 的 ``OutgoingSegment`` 认**，
+    且是可选字段。OneBot 没有对应概念，收到的一律是 ``None``。
+    """
 
     type: str = "video"
     duration: int = 0
     width: int | None = None
     height: int | None = None
+    thumb_uri: str | None = None
 
     def __init__(
         self,
@@ -210,6 +234,7 @@ class Video(MediaSegment):
         duration: int = 0,
         width: int | None = None,
         height: int | None = None,
+        thumb_uri: str | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(
@@ -218,16 +243,21 @@ class Video(MediaSegment):
             duration=duration,
             width=width,
             height=height,
+            thumb_uri=thumb_uri,
             **kwargs,
         )
 
 
 class File(MediaSegment):
-    """文件。"""
+    """文件。
+
+    ``file_hash`` 是 Milky 给的 TriSHA1（**仅私聊文件有**），OneBot 不给。
+    """
 
     type: str = "file"
     name: str = ""
     size: int = 0
+    file_hash: str = ""
 
     def __init__(
         self,
@@ -235,9 +265,17 @@ class File(MediaSegment):
         temp_url: str | None = None,
         name: str = "",
         size: int = 0,
+        file_hash: str = "",
         **kwargs: Any,
     ) -> None:
-        super().__init__(uri=uri, temp_url=temp_url, name=name, size=size, **kwargs)
+        super().__init__(
+            uri=uri,
+            temp_url=temp_url,
+            name=name,
+            size=size,
+            file_hash=file_hash,
+            **kwargs,
+        )
 
 
 class Face(Segment):
@@ -462,13 +500,15 @@ class Share(Segment):
 
 
 class Contact(Segment):
-    """推荐好友 / 群。``kind`` 是 ``qq`` 或 ``group``。"""
+    """推荐好友 / 群。"""
 
     type: str = "contact"
-    kind: str = "qq"
+    kind: ContactKind = ContactKind.QQ
     id: int = 0
 
-    def __init__(self, kind: str = "qq", id: int = 0, **kwargs: Any) -> None:
+    def __init__(
+        self, kind: ContactKind = ContactKind.QQ, id: int = 0, **kwargs: Any
+    ) -> None:
         super().__init__(kind=kind, id=id, **kwargs)
 
 
@@ -493,10 +533,10 @@ class Location(Segment):
 
 
 class Music(Segment):
-    """音乐分享。``kind`` 是 ``qq`` / ``163`` / ``xm`` / ``custom``。"""
+    """音乐分享。"""
 
     type: str = "music"
-    kind: str = "qq"
+    kind: MusicKind = MusicKind.QQ
     id: str = ""
     url: str = ""
     audio: str = ""
@@ -506,7 +546,7 @@ class Music(Segment):
 
     def __init__(
         self,
-        kind: str = "qq",
+        kind: MusicKind = MusicKind.QQ,
         id: str = "",
         url: str = "",
         audio: str = "",
@@ -528,13 +568,27 @@ class Music(Segment):
 
 
 class Reply(Segment):
-    """回复引用。"""
+    """回复引用。
+
+    ``ref`` 只给坐标——要内容得另外查。Milky 1.2 起会在段里**顺带带上**被
+    引用消息的内容和发送者，填进下面几个字段；OneBot 不给，那里全是默认值。
+    """
 
     type: str = "reply"
     ref: MessageRef | None = None
+    content: list[SerializeAsAny[Segment]] = Field(default_factory=list)
+    sender_id: int = 0
+    sender_name: str = ""
+    time: int = 0
 
     def __init__(self, ref: MessageRef | None = None, **kwargs: Any) -> None:
         super().__init__(ref=ref, **kwargs)
+
+    @field_validator("content", mode="before")
+    @classmethod
+    def _coerce_content(cls, value: Any) -> Any:
+        """内容可以是段 / dict / 字符串，统一成段列表。"""
+        return [] if value is None else as_segments(value)
 
 
 class UnknownSegment(Segment):

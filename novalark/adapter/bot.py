@@ -4,16 +4,19 @@ from typing import TYPE_CHECKING, Any
 
 from ..log import get_logger
 from ..model.actions import ActionResult
-from ..model.events import FriendRequestEvent, GroupRequestEvent
 from ..model.entities import (
     Friend,
+    FriendRequest,
     Group,
     GroupAnnouncement,
     GroupFile,
     GroupHonor,
     GroupMember,
+    GroupRequest,
+    ImplInfo,
     User,
 )
+from ..model.enums import HonorType
 from ..model.message import Content, Message, RichText
 from ..model.refs import ConversationRef, MessageRef
 from ..model.segments import ForwardNode, MediaSegment
@@ -249,9 +252,133 @@ class Bot:
         """取群文件列表。"""
         return await self.adapter.get_group_files(group_id)
 
-    async def get_honor(self, group_id: int, honor_type: str = "") -> list[GroupHonor]:
-        """取群荣誉（龙王、群聊之火…）。"""
+    async def get_honor(
+        self, group_id: int, honor_type: HonorType | None = None
+    ) -> list[GroupHonor]:
+        """取群荣誉（龙王、群聊之火…）。``honor_type`` 留空取全部。"""
         return await self.adapter.get_honor(group_id, honor_type)
+
+    # ── 群文件 ─────────────────────────────────────────────
+
+    async def upload_group_file(
+        self, group_id: int, uri: str, name: str, *, folder_id: str = "/"
+    ) -> str:
+        """上传群文件，返回 ``file_id``。"""
+        return await self.adapter.upload_group_file(
+            group_id, uri, name, folder_id=folder_id
+        )
+
+    async def upload_private_file(self, user_id: int, uri: str, name: str) -> str:
+        """上传私聊文件，返回 ``file_id``。"""
+        return await self.adapter.upload_private_file(user_id, uri, name)
+
+    async def get_group_file_url(self, group_id: int, file_id: str) -> str:
+        """取群文件的下载链接。"""
+        return await self.adapter.get_group_file_url(group_id, file_id)
+
+    async def get_private_file_url(
+        self,
+        user_id: int,
+        file_id: str,
+        file_hash: str = "",
+        *,
+        is_self_send: bool = False,
+    ) -> str:
+        """取私聊文件的下载链接。``file_hash`` 见 ``File.file_hash``。"""
+        return await self.adapter.get_private_file_url(
+            user_id, file_id, file_hash, is_self_send=is_self_send
+        )
+
+    async def create_group_folder(self, group_id: int, name: str) -> str:
+        """建群文件夹，返回 ``folder_id``。"""
+        return await self.adapter.create_group_folder(group_id, name)
+
+    async def rename_group_folder(
+        self, group_id: int, folder_id: str, name: str
+    ) -> None:
+        """重命名群文件夹。"""
+        await self.adapter.rename_group_folder(group_id, folder_id, name)
+
+    async def delete_group_folder(self, group_id: int, folder_id: str) -> None:
+        """删群文件夹。"""
+        await self.adapter.delete_group_folder(group_id, folder_id)
+
+    async def delete_group_file(self, group_id: int, file_id: str) -> None:
+        """删群文件。"""
+        await self.adapter.delete_group_file(group_id, file_id)
+
+    async def move_group_file(
+        self,
+        group_id: int,
+        file_id: str,
+        *,
+        folder_id: str = "/",
+        target_folder_id: str = "/",
+    ) -> None:
+        """把群文件挪到另一个文件夹。"""
+        await self.adapter.move_group_file(
+            group_id, file_id, folder_id=folder_id, target_folder_id=target_folder_id
+        )
+
+    async def rename_group_file(
+        self, group_id: int, file_id: str, name: str, *, folder_id: str = "/"
+    ) -> None:
+        """重命名群文件。"""
+        await self.adapter.rename_group_file(
+            group_id, file_id, name, folder_id=folder_id
+        )
+
+    async def persist_group_file(self, group_id: int, file_id: str) -> None:
+        """把群文件转存为永久文件。"""
+        await self.adapter.persist_group_file(group_id, file_id)
+
+    # ── 会话置顶 ───────────────────────────────────────────
+
+    async def get_pinned(self) -> tuple[list[Friend], list[Group]]:
+        """取置顶的会话，``(好友, 群)``。"""
+        return await self.adapter.get_pinned()
+
+    async def set_pinned(
+        self, conversation: ConversationRef, pinned: bool = True
+    ) -> None:
+        """置顶或取消置顶一个会话。"""
+        await self.adapter.set_pinned(conversation, pinned)
+
+    # ── 实现端与账号 ───────────────────────────────────────
+
+    async def get_impl_info(self) -> ImplInfo:
+        """取实现端自己的信息（名字、版本、实现的协议版本…）。"""
+        return await self.adapter.get_impl_info()
+
+    async def get_cookies(self, domain: str) -> str:
+        """取某个域名下的 Cookies。"""
+        return await self.adapter.get_cookies(domain)
+
+    async def get_csrf_token(self) -> str:
+        """取 CSRF Token。"""
+        return await self.adapter.get_csrf_token()
+
+    async def get_custom_faces(self) -> list[str]:
+        """取自定义表情的 URL 列表。"""
+        return await self.adapter.get_custom_faces()
+
+    async def get_friend_info(self, user_id: int) -> Friend:
+        """取好友资料（带备注、分组）。"""
+        return await self.adapter.get_friend_info(user_id)
+
+    # ── 待处理的请求 ───────────────────────────────────────
+
+    async def get_friend_requests(
+        self, limit: int = 20, *, filtered: bool = False
+    ) -> list[FriendRequest]:
+        """取好友申请。每条都能交给 :meth:`approve_friend_request`。"""
+        return await self.adapter.get_friend_requests(limit, filtered=filtered)
+
+    async def get_group_notifications(
+        self, limit: int = 20, *, filtered: bool = False
+    ) -> list[dict[str, Any]]:
+        """取群通知（入群申请、管理员变更…），按序列号从新到旧。"""
+        return await self.adapter.get_group_notifications(limit, filtered=filtered)
 
     # ── 好友与账号 ─────────────────────────────────────────
 
@@ -286,13 +413,13 @@ class Bot:
     # ── 请求处理 ───────────────────────────────────────────
 
     async def approve_friend_request(
-        self, request: FriendRequestEvent, approve: bool = True, remark: str = ""
+        self, request: FriendRequest, approve: bool = True, remark: str = ""
     ) -> None:
-        """同意或拒绝好友申请。"""
+        """同意或拒绝一条好友申请。"""
         await self.adapter.approve_friend_request(request, approve, remark)
 
     async def approve_group_request(
-        self, request: GroupRequestEvent, approve: bool = True, reason: str = ""
+        self, request: GroupRequest, approve: bool = True, reason: str = ""
     ) -> None:
-        """同意或拒绝一条群请求（别人申请进群 / 机器人被邀请进群）。"""
+        """同意或拒绝一条群请求（别人要进群 / 机器人被邀请进群）。"""
         await self.adapter.approve_group_request(request, approve, reason)

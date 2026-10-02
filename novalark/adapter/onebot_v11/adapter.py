@@ -12,7 +12,18 @@ from starlette.routing import Route
 
 from ...log import get_logger
 from ...model.actions import ActionResult
-from ...model.entities import Friend, Group, GroupHonor, GroupMember, User
+from ...model.entities import (
+    Friend,
+    FriendRequest,
+    Group,
+    GroupHonor,
+    GroupInviteRequest,
+    GroupMember,
+    GroupRequest,
+    ImplInfo,
+    User,
+)
+from ...model.enums import ActionStatus, HonorType
 from ...model.events import (
     FriendRequestEvent,
     GroupInviteRequestEvent,
@@ -36,15 +47,15 @@ logger = get_logger("adapter.onebot_v11")
 # 解转发内容时只用来给段一个会话坐标，内容本身不含坐标
 _GROUP_PLACEHOLDER = ConversationRef(scene=MessageScene.GROUP, peer_id=0)
 
-#: 群荣誉响应里的键名 → 语义名。``current_talkative`` 是单个对象（当前龙王），
+#: 群荣誉响应里的键名 → 荣誉种类。``current_talkative`` 是单个对象（当前龙王），
 #: 其余几个都是 ``*_list``。
 _HONOR_TYPES = {
-    "current_talkative": "talkative",
-    "talkative_list": "talkative",
-    "performer_list": "performer",
-    "legend_list": "legend",
-    "strong_newbie_list": "strong_newbie",
-    "emotion_list": "emotion",
+    "current_talkative": HonorType.TALKATIVE,
+    "talkative_list": HonorType.TALKATIVE,
+    "performer_list": HonorType.PERFORMER,
+    "legend_list": HonorType.LEGEND,
+    "strong_newbie_list": HonorType.STRONG_NEWBIE,
+    "emotion_list": HonorType.EMOTION,
 }
 
 
@@ -162,10 +173,12 @@ class OneBotV11Adapter(Adapter):
         payload = await self.call_raw(action, params)
         if not isinstance(payload, dict):
             return ActionResult(
-                status="failed", retcode=-1, message=f"响应不是对象: {payload!r}"
+                status=ActionStatus.FAILED,
+                retcode=-1,
+                message=f"响应不是对象: {payload!r}",
             )
         return ActionResult(
-            status=str(payload.get("status") or "ok"),
+            status=ActionStatus(payload.get("status") or ActionStatus.OK),
             retcode=to_int(payload.get("retcode")),
             data=payload.get("data"),
             message=str(payload.get("message") or payload.get("wording") or ""),
@@ -360,10 +373,12 @@ class OneBotV11Adapter(Adapter):
 
     # ── 群 ─────────────────────────────────────────────────
 
-    async def get_honor(self, group_id: int, honor_type: str = "") -> list[GroupHonor]:
+    async def get_honor(
+        self, group_id: int, honor_type: HonorType | None = None
+    ) -> list[GroupHonor]:
         params: dict[str, Any] = {"group_id": group_id}
-        if honor_type:
-            params["type"] = honor_type
+        # 不给就是取全部
+        params["type"] = honor_type or HonorType.ALL
         data = (await self.call("get_group_honor_info", params)).unwrap()
         raw = data if isinstance(data, dict) else {}
 
@@ -407,10 +422,35 @@ class OneBotV11Adapter(Adapter):
     async def set_bio(self, bio: str) -> None:
         (await self.call("set_qq_profile", {"personal_note": bio})).unwrap()
 
+    # ── 实现端与账号 ───────────────────────────────────────
+
+    async def get_impl_info(self) -> ImplInfo:
+        data = (await self.call("get_version_info")).unwrap()
+        raw = data if isinstance(data, dict) else {}
+        return ImplInfo.model_validate(
+            {
+                **raw,
+                "name": str(raw.get("app_name") or ""),
+                "version": str(raw.get("app_version") or ""),
+                "protocol_version": str(raw.get("protocol_version") or ""),
+            }
+        )
+
+    async def get_cookies(self, domain: str) -> str:
+        data = (await self.call("get_cookies", {"domain": domain})).unwrap()
+        raw = data if isinstance(data, dict) else {}
+        return str(raw.get("cookies") or "")
+
+    async def get_csrf_token(self) -> str:
+        # 标准里这个字段叫 token，Milky 那边叫 csrf_token
+        data = (await self.call("get_csrf_token")).unwrap()
+        raw = data if isinstance(data, dict) else {}
+        return str(raw.get("token") or "")
+
     # ── 请求处理 ───────────────────────────────────────────
 
     async def approve_friend_request(
-        self, request: FriendRequestEvent, approve: bool = True, remark: str = ""
+        self, request: FriendRequest, approve: bool = True, remark: str = ""
     ) -> None:
         (
             await self.call(
@@ -420,7 +460,7 @@ class OneBotV11Adapter(Adapter):
         ).unwrap()
 
     async def approve_group_request(
-        self, request: GroupRequestEvent, approve: bool = True, reason: str = ""
+        self, request: GroupRequest, approve: bool = True, reason: str = ""
     ) -> None:
         # sub_type 必须和收到的那条一致
         (
@@ -430,7 +470,7 @@ class OneBotV11Adapter(Adapter):
                     "flag": request.flag,
                     "sub_type": (
                         "invite"
-                        if isinstance(request, GroupInviteRequestEvent)
+                        if isinstance(request, GroupInviteRequest)
                         else "add"
                     ),
                     "approve": approve,

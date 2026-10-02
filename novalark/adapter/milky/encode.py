@@ -70,37 +70,31 @@ async def _resolve_node(node: ForwardNode) -> ForwardNode:
     return node.model_copy(update={"content": content.segments})
 
 
-#: 各媒体段出站允许的声明字段。比入站窄得多：``OutgoingSegment.image`` 只认
-#: ``uri`` / ``sub_type`` / ``summary``，record 和 video 只认 ``uri``（video
-#: 另有可选的 ``thumb_uri``，模型层没有对应字段）。``width`` / ``height`` /
-#: ``duration`` 是入站专有的，发出去协议端不认。
+#: 各媒体段出站允许的字段。``OutgoingSegment`` 是**封闭结构**，出站字段就
+#: 这几个：``image`` 是 ``uri`` / ``sub_type`` / ``summary``，``record`` 只有
+#: ``uri``，``video`` 是 ``uri`` / ``thumb_uri``。入站专有的 ``width`` /
+#: ``height`` / ``duration`` / ``resource_id`` 协议端不认，一概不发。
 _OUTGOING_MEDIA_FIELDS: dict[str, tuple[str, ...]] = {
-    "image": ("summary",),
+    "image": ("summary", "sub_type"),
     "record": (),
-    "video": (),
+    "video": ("thumb_uri",),
 }
-
-#: 入站专有的键。decode 把整个 ``data`` 摊进模型，出站结构里没有的这些落进
-#: ``model_extra``；不剔掉的话"收进来再发出去"会把 ``resource_id`` 原样回吐。
-_INCOMING_ONLY = frozenset(
-    {"resource_id", "temp_url", "file_id", "file_name", "file_size", "file_hash"}
-)
 
 
 def _media_data(seg: MediaSegment) -> dict[str, Any]:
-    """媒体段的出站 data：协议扩展 + 出站允许的声明字段 + 内容地址。"""
-    data: dict[str, Any] = {
-        key: value
-        for key, value in (seg.model_extra or {}).items()
-        if key not in _INCOMING_ONLY
-    }
+    """媒体段的出站 data：协议认的声明字段 + 内容地址。
+
+    按白名单取，而不是「摊开 ``model_extra`` 再剔掉几个键」：出站结构是封闭
+    的，多带的字段协议端不认；更要紧的是跨协议转发时，对方的入站字段
+    （OneBot 的 ``file`` / ``url``、Milky 的 ``resource_id``…）会被原样吐出去。
+    """
     declared = type(seg).model_fields
-    for field in _OUTGOING_MEDIA_FIELDS[seg.type]:
-        if field in declared:
-            data.setdefault(field, getattr(seg, field))
+    data: dict[str, Any] = {
+        field: getattr(seg, field)
+        for field in _OUTGOING_MEDIA_FIELDS[seg.type]
+        if field in declared
+    }
     data["uri"] = _outgoing_uri(seg)
-    if seg.type == "image":
-        data.setdefault("sub_type", "normal")
     return _compact(data)
 
 

@@ -13,6 +13,7 @@ from novalark.model import (
     Group,
     GroupMessageEvent,
     Image,
+    ImageSubType,
     LightApp,
     Message,
     MessageEvent,
@@ -88,6 +89,29 @@ def test_segment_keeps_protocol_original_in_raw():
 
 def test_null_protocol_fields_fall_back_to_defaults():
     assert Text.model_validate({"type": "text", "text": None}).text == ""
+
+
+def test_protocol_values_are_typed():
+    """取值由协议定死的字段给的是枚举，不是裸字符串。
+
+    枚举是 ``str`` 的子类：和协议原文直接比、序列化成 JSON 都照旧，插件不用
+    为「拿到的是枚举还是字符串」操心。
+    """
+    image = Image(uri="http://x/y.png", sub_type="sticker")
+    assert image.sub_type is ImageSubType.STICKER
+    assert image.sub_type == "sticker"
+    assert image.model_dump(mode="json")["sub_type"] == "sticker"
+
+    # 协议加了值也不能把段打成未知类型：取值照收，类型还是图片
+    future = Image.model_validate({"type": "image", "sub_type": "animated"})
+    assert isinstance(future, Image)
+    assert future.sub_type == "animated"
+
+
+def test_a_scene_typo_is_refused():
+    """会话场景不从协议解析，是模型自己的取值 —— 写错就该报错。"""
+    with pytest.raises(ValueError):
+        MessageScene("gruop")
 
 
 def test_at_all_is_explicit():
@@ -227,11 +251,11 @@ def test_segment_fields_survive_container_dump():
     ``Segment`` 序列化，子类字段（``text`` / ``user_id``…）会被静默丢掉；
     靠 ``SerializeAsAny`` 治。这里把两个容器都钉死。
     """
-    dumped = RichText([Text("hi"), At(user_id=42)]).model_dump()
+    dumped = RichText([Text("hi"), At(user_id=42, name="小明")]).model_dump()
     assert dumped == {
         "segments": [
             {"type": "text", "text": "hi"},
-            {"type": "at", "user_id": 42},
+            {"type": "at", "user_id": 42, "name": "小明"},
         ]
     }
 

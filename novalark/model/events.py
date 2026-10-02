@@ -9,11 +9,19 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, ClassVar, Self
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, Self, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
-from .entities import Group, Sender
+from .entities import (
+    FriendRequest,
+    Group,
+    GroupInviteRequest,
+    GroupJoinRequest,
+    GroupRequest,
+    Sender,
+)
+from .enums import HonorType, LifecycleState, ReactionType
 from .message import Content, Message, RichText
 from .refs import ConversationRef, MessageRef
 
@@ -250,7 +258,7 @@ class GroupReactionEvent(GroupEvent):
     ref: MessageRef  # 被回应的那条
     user_id: int = 0
     face_id: str = ""
-    reaction_type: str = "face"  # face / emoji
+    reaction_type: ReactionType = ReactionType.FACE
     is_add: bool = True
 
 
@@ -287,7 +295,12 @@ class FriendAddEvent(Event):
 
 
 class FriendNudgeEvent(Event):
-    """好友之间戳一戳。"""
+    """好友之间戳一戳。
+
+    ``sender_id`` / ``receiver_id`` 谁戳谁由协议给的「是不是自己发的」定。
+    Milky 还单给一个「是不是自己收的」，但好友之间只有一对一，两者互补，
+    从 ``sender_id`` 就推得出来，不再存一份可能对不上的副本。
+    """
 
     kind: str = "friend_nudge"
     user_id: int = 0
@@ -296,6 +309,16 @@ class FriendNudgeEvent(Event):
     action: str = ""
     suffix: str = ""
     action_image: str = ""
+
+    @property
+    def is_self_send(self) -> bool:
+        """这次戳一戳是机器人自己发出去的吗。"""
+        return bool(self.self_id) and self.sender_id == self.self_id
+
+    @property
+    def is_self_receive(self) -> bool:
+        """是戳到机器人头上的吗。"""
+        return bool(self.self_id) and self.receiver_id == self.self_id
 
 
 class FriendFileUploadEvent(Event):
@@ -306,6 +329,7 @@ class FriendFileUploadEvent(Event):
     file_id: str = ""
     name: str = ""
     size: int = 0
+    file_hash: str = ""  # Milky 给的 TriSHA1；OneBot 没有这个事件
     is_self: bool = False
 
 
@@ -331,40 +355,59 @@ class PeerPinChangeEvent(Event):
 
 
 class FriendRequestEvent(Event):
-    """收到好友申请。``flag`` 是处理它时要带上的凭据。"""
+    """收到好友申请。申请本身在 :attr:`request` 里。"""
 
     kind: str = "friend_request"
-    user_id: int = 0
-    comment: str = ""
-    flag: str = ""
-    via: str = ""
+    request: FriendRequest
+
+    async def approve(self, remark: str = "") -> None:
+        """同意。``remark`` 是给对方设的备注。"""
+        await self.bot.approve_friend_request(self.request, approve=True, remark=remark)
+
+    async def reject(self, remark: str = "") -> None:
+        """拒绝。"""
+        await self.bot.approve_friend_request(self.request, approve=False, remark=remark)
 
 
-class GroupRequestEvent(GroupEvent):
-    """等着批的群请求。``flag`` 是处理它时要带上的凭据。
+R = TypeVar("R", bound=GroupRequest)
 
-    这是个基类，不会被直接派发 —— 实际收到的一定是下面两个子类之一。
-    ``@on(GroupRequestEvent)`` 能把两者一起接下。
+
+class GroupRequestEvent(GroupEvent, Generic[R]):
+    """等着批的群请求。请求本身在 :attr:`request` 里。
+
+    两个子类靠**语义**分，不靠协议的事件名：
+
+    - :class:`GroupJoinRequestEvent` —— 有人要进群（自己申请，或被别人邀请）
+    - :class:`GroupInviteRequestEvent` —— 机器人**自己被**邀请进群
     """
 
-    comment: str = ""
-    flag: str = ""
-    sequence: int = 0
+    request: R
+
+    @model_validator(mode="after")
+    def _sync_group_id(self) -> Self:
+        """群号由请求本身决定。"""
+        self.group_id = self.request.group_id
+        return self
+
+    async def approve(self, reason: str = "") -> None:
+        """同意。"""
+        await self.bot.approve_group_request(self.request, approve=True, reason=reason)
+
+    async def reject(self, reason: str = "") -> None:
+        """拒绝。``reason`` 会一并发给对方。"""
+        await self.bot.approve_group_request(self.request, approve=False, reason=reason)
 
 
-class GroupJoinRequestEvent(GroupRequestEvent):
-    """有人申请加入群里。"""
+class GroupJoinRequestEvent(GroupRequestEvent[GroupJoinRequest]):
+    """有人要进群，等着批。"""
 
     kind: str = "group_join_request"
-    user_id: int = 0
 
 
-class GroupInviteRequestEvent(GroupRequestEvent):
-    """机器人被邀请进某个群。"""
+class GroupInviteRequestEvent(GroupRequestEvent[GroupInviteRequest]):
+    """机器人自己被邀请进某个群。"""
 
     kind: str = "group_invite_request"
-    invitor_id: int = 0
-    source_group_id: int = 0  # OneBot 不给，恒为 0
 
 
 class BotOfflineEvent(Event):
@@ -378,7 +421,7 @@ class LifecycleEvent(Event):
     """实现端的连接状态变化。"""
 
     kind: str = "lifecycle"
-    state: str = ""
+    state: LifecycleState | None = None
 
 
 class HeartbeatEvent(Event):
@@ -395,7 +438,7 @@ class GroupHonorEvent(GroupEvent):
 
     kind: str = "group_honor"
     user_id: int = 0
-    honor_type: str = ""
+    honor_type: HonorType | None = None
 
 
 class GroupLuckyKingEvent(GroupEvent):
