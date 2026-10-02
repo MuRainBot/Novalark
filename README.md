@@ -1,6 +1,6 @@
 # Novalark
 
-**轻量、多协议、asyncio 的 QQ 机器人框架。**
+**轻量、多协议、asyncio 的下一代 QQ 机器人框架。**
 
 一套 QQ 语义模型，各协议的适配器把协议投影上来——插件只对着模型写，
 不用管跑的是 OneBot V11 还是 Milky。
@@ -18,6 +18,8 @@ async def echo(event: GroupMessageEvent, text: str | None = None):
 ```
 
 ## 快速开始
+
+项目仍在早期，API 可能大幅变动。
 
 需要 Python 3.12+。
 
@@ -138,4 +140,6 @@ novalark/
 
 ## 许可
 
-LGPL-2.1。项目仍在早期，API 可能大幅变动。
+Copyright (c) 2026 Xiaosu.
+
+Distributed under the terms of the [GNU LESSER GENERAL PUBLIC LICENSE Version 2.1](https://github.com/MuRainBot/Novalark/blob/main/LICENSE).
