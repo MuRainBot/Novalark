@@ -21,7 +21,7 @@ from ...model.events import (
 from ...model.message import Message, RichText
 from ...model.segments import ForwardNode
 from ...model.refs import ConversationRef, MessageRef, MessageScene
-from ...model.segments import Reply, Segment
+from ...model.segments import MediaSegment, Reply, Segment
 from .._util import to_int
 from ..base import Adapter, register_adapter
 from ..bot import clear_current_bot, set_current_bot
@@ -29,6 +29,7 @@ from .decode import _decode_content, _decode_sender
 from .config import OneBotV11Config
 from .decode import decode_event
 from .encode import encode_segments
+from .segments import resolve_media
 
 logger = get_logger("adapter.onebot_v11")
 
@@ -178,6 +179,10 @@ class OneBotV11Adapter(Adapter):
         return response.json()
 
     # ── 语义化动作 ─────────────────────────────────────────
+
+    async def _media_url(self, segment: MediaSegment) -> str:
+        """调实现端的取媒体接口。"""
+        return await resolve_media(segment.type, segment.uri)
 
     async def send_message(
         self,

@@ -29,9 +29,10 @@ from .._util import to_int
 from ..base import Adapter, UnsupportedAction, register_adapter
 from ..bot import clear_current_bot, set_current_bot
 from .config import MilkyConfig
-from ...model.segments import ForwardNode
+from ...model.segments import ForwardNode, MediaSegment
 from .decode import _decode_message, _decode_segment, _scene_of, decode_event
-from .encode import encode_segments
+from .encode import encode_segments, resolve_handles
+from .segments import resolve_media
 
 logger = get_logger("adapter.milky")
 
@@ -151,6 +152,10 @@ class MilkyAdapter(Adapter):
 
     # ── 语义化动作 ─────────────────────────────────────────
 
+    async def _media_url(self, segment: MediaSegment) -> str:
+        """问协议端要一个临时链接。"""
+        return await resolve_media(segment.type, segment.uri)
+
     async def send_message(
         self,
         conversation: ConversationRef,
@@ -158,7 +163,8 @@ class MilkyAdapter(Adapter):
         *,
         reply_to: MessageRef | None = None,
     ) -> MessageRef:
-        segments = encode_segments(content)
+        # 句柄换成地址要发请求，所以放在编码之前 —— encode 本身是纯函数
+        segments = encode_segments(await resolve_handles(content))
         if reply_to is not None:
             segments.insert(0, {"type": "reply", "data": {"message_seq": reply_to.seq}})
 

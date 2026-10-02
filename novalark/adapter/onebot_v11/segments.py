@@ -18,9 +18,20 @@ from ...model.segments import (
 from ..bot import get_bot
 
 
+#: 收来的协议端句柄长这样
+HANDLE_PREFIX = "onebot:"
+
+#: 段类型 → 取地址的动作。视频和文件 OneBot 都没有对应接口 —— 文件只能按
+#: ``file_id`` 操作，没有「取下载地址」那一支。
+MEDIA_ACTIONS = {
+    "image": "get_image",
+    "record": "get_record",
+}
+
+
 async def _fetch(action: str, uri: str) -> str:
     """调 OneBot 的取媒体接口，从返回值里挑出地址。"""
-    handle = uri.removeprefix("onebot:")
+    handle = uri.removeprefix(HANDLE_PREFIX)
     data = (await get_bot().call(action, {"file": handle})).unwrap()
 
     if isinstance(data, dict):
@@ -32,20 +43,30 @@ async def _fetch(action: str, uri: str) -> str:
     raise UnresolvableUri(uri)
 
 
+async def resolve_media(seg_type: str, uri: str) -> str:
+    """``onebot:<file>`` → 能访问的地址。
+
+    适配器（``OneBotV11Adapter._media_url``）和段子类共用这一条。
+    """
+    action = MEDIA_ACTIONS.get(seg_type)
+    if action is None or not uri.startswith(HANDLE_PREFIX):
+        raise UnresolvableUri(uri)
+    return await _fetch(action, uri)
+
+
 class OneBotImage(Image):
     async def _resolve(self) -> str:
-        return await _fetch("get_image", self.uri)
+        return await resolve_media(self.type, self.uri)
 
 
 class OneBotRecord(Record):
     async def _resolve(self) -> str:
-        return await _fetch("get_record", self.uri)
+        return await resolve_media(self.type, self.uri)
 
 
 class OneBotFile(File):
     async def _resolve(self) -> str:
-        # OneBot 没有「按 file_id 取下载地址」的接口
-        raise UnresolvableUri(self.uri)
+        return await resolve_media(self.type, self.uri)
 
 
 class OneBotForward(Forward):

@@ -139,6 +139,9 @@ class MediaSegment(Segment):
         ``uri`` 本身是地址就直接给；是协议句柄就问适配器换。
 
         ``temp_url`` 是收到那一刻的快照，**可能已经过期**，本方法不使用它。
+
+        只对**收来的**段管用：解句柄要认识协议，而模型层不认识。段是自己拿
+        句柄字符串造的（基类）时走 ``Bot.media_url(seg)``。
         """
         if self.uri.startswith(URL_SCHEMES):
             return self.uri

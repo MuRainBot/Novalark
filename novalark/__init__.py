@@ -1,7 +1,14 @@
 """Novalark —— 轻量、多协议、asyncio 的 QQ 机器人框架。
 """
 
-from .adapter import Adapter, Bot, UnsupportedAction, get_bot, register_adapter
+from .adapter import (
+    Adapter,
+    Bot,
+    UnsupportedAction,
+    UnsupportedSegment,
+    get_bot,
+    register_adapter,
+)
 from .app import App
 from .command import (
     Arg,
@@ -230,6 +237,7 @@ __all__ = [
     "UnknownSegment",
     "UnresolvableUri",
     "UnsupportedAction",
+    "UnsupportedSegment",
     "User",
     "Video",
     "Xml",

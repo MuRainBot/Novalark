@@ -16,7 +16,7 @@ from ..model.entities import (
 )
 from ..model.message import Content, Message, RichText
 from ..model.refs import ConversationRef, MessageRef
-from ..model.segments import ForwardNode
+from ..model.segments import ForwardNode, MediaSegment
 
 if TYPE_CHECKING:
     from .base import Adapter
@@ -89,6 +89,19 @@ class Bot:
         return await self.adapter.call_raw(action, params)
 
     # ── 消息 ───────────────────────────────────────────────
+
+    async def media_url(self, segment: MediaSegment) -> str:
+        """取媒体段里内容的可访问地址。
+
+        收到的事件里的段本来就是适配器子类，``await seg.get_url()`` 直接能用；
+        这个是给**自己造的段**用的 —— 存下来的句柄过一阵再拿，手上只剩字符串::
+
+            saved = event.content.segments[0].uri     # "milky:res-1"
+            url = await event.bot.media_url(Image(uri=saved))
+
+        发消息倒不需要它：句柄怎么换成能发的形式由适配器在发送时负责。
+        """
+        return await self.adapter.media_url(segment)
 
     async def send(self, conversation: ConversationRef, content: "Content") -> MessageRef:
         """往一个会话发消息。

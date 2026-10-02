@@ -29,7 +29,7 @@ from ..model.entities import (
 from ..model.events import Event, FriendRequestEvent, GroupRequestEvent
 from ..model.message import Message, RichText
 from ..model.refs import ConversationRef, MessageRef
-from ..model.segments import ForwardNode
+from ..model.segments import URL_SCHEMES, ForwardNode, MediaSegment, UnresolvableUri
 from ._util import brief, to_int
 
 if TYPE_CHECKING:
@@ -45,6 +45,20 @@ class UnsupportedAction(ActionError):
         who = f"{adapter} " if adapter else ""
         super().__init__(f"{who}不支持 {action}")
         self.action = action
+
+
+class UnsupportedSegment(ActionError):
+    """这个适配器发不了这种段。
+
+    协议只允许发一部分段类型（Milky 的 ``OutgoingSegment`` 里就没有
+    ``file`` / ``xml`` / ``markdown``），编码时直接报错好过发出去让对方
+    自己猜。
+    """
+
+    def __init__(self, seg_type: str, adapter: str = "") -> None:
+        who = f"{adapter} " if adapter else ""
+        super().__init__(f"{who}发不了 {seg_type} 段")
+        self.seg_type = seg_type
 
 
 class AdapterConfig(BaseModel):
@@ -186,6 +200,22 @@ class Adapter(ABC):
         """查好友列表。"""
 
     # ── 消息 ───────────────────────────────────────────────
+
+    async def media_url(self, segment: MediaSegment) -> str:
+        """取媒体段里内容的可访问地址。
+
+        段里本来就是地址（``http(s)://`` 等）就直接给；是协议句柄就问实现端
+        换一个。``segment`` 收的是模型层的段，**不要求是适配器自己的子类** ——
+        插件手上常常只剩个存下来的句柄字符串，自己 ``Image(uri=...)`` 造出来
+        的就是基类，走不到段自己的 :meth:`MediaSegment.get_url`。
+        """
+        if segment.uri.startswith(URL_SCHEMES):
+            return segment.uri
+        return await self._media_url(segment)
+
+    async def _media_url(self, segment: MediaSegment) -> str:
+        """把句柄换成地址。做不到抛 ``UnresolvableUri``。"""
+        raise UnresolvableUri(segment.uri)
 
     async def send_nudge(self, conversation: ConversationRef, user_id: int) -> None:
         """戳一戳。"""

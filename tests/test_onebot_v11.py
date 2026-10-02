@@ -187,11 +187,15 @@ def test_encode_media_reads_uri_and_strips_prefix():
 
 
 def test_media_roundtrips_through_onebot():
-    """收进来再发出去，file 不变。"""
+    """收进来再发出去，file 不变。
+
+    入站的 ``url``（模型里叫 ``temp_url``）不回吐 —— 它只是当时的快照，
+    出站再带一份和 ``file`` 打架。
+    """
     raw = {"type": "image", "data": {"file": "abc.jpg", "url": "http://cdn/x.jpg"}}
     event = decode_event({**GROUP_MESSAGE, "message": [raw]})
     encoded = encode_segments(event.content)
-    assert encoded[0]["data"]["file"] == "abc.jpg"
+    assert encoded[0]["data"] == {"file": "abc.jpg"}
 
 
 def test_foreign_handle_is_refused_not_sent():

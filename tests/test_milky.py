@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from novalark import UnsupportedSegment
 from novalark.adapter.milky.config import MilkyConfig
 from novalark.adapter.milky.decode import decode_event
 from novalark.adapter.milky.encode import encode_segments
@@ -18,6 +19,7 @@ from novalark.model import (
     GroupReactionEvent,
     GroupRecallEvent,
     GroupWholeMuteEvent,
+    File,
     Forward,
     ForwardNode,
     FriendMessageEvent,
@@ -25,6 +27,7 @@ from novalark.model import (
     Image,
     LightApp,
     Markdown,
+    MarketFace,
     RichText,
     Text,
     UnknownEvent,
@@ -65,6 +68,50 @@ def test_config_derives_urls():
     config = MilkyConfig(type="milky", base_url="https://bot.example.com/")
     assert config.api_url == "https://bot.example.com/api"
     assert config.event_url == "wss://bot.example.com/event"
+
+
+def _milky_adapter():
+    from novalark.adapter.milky.adapter import MilkyAdapter
+
+    return MilkyAdapter(MilkyConfig(type="milky", base_url="https://bot.example.com/"))
+
+
+def test_bot_media_url_resolves_a_segment_built_from_a_bare_handle(scenario):
+    """插件手上只剩句柄字符串时，从 bot 这一层取地址。
+
+    ``Image(uri=...)`` 造出来的是模型层基类 —— 它不认识任何协议，``get_url()``
+    只能抛。适配器认识，所以这条道开在适配器上。
+    """
+
+    async def body():
+        from novalark.adapter.bot import set_current_bot
+
+        class FakeBot:
+            async def call(self, action, params):
+                assert action == "get_resource_temp_url"
+                assert params == {"resource_id": "res-1"}
+                return ActionResult(data={"url": "http://fresh/x.jpg"})
+
+        set_current_bot(FakeBot())  # type: ignore[arg-type]
+
+        with pytest.raises(UnresolvableUri):
+            await Image(uri="milky:res-1").get_url()
+
+        url = await _milky_adapter().bot.media_url(Image(uri="milky:res-1"))
+        assert url == "http://fresh/x.jpg"
+
+    scenario(body)
+
+
+def test_bot_media_url_passes_a_plain_address_through(scenario):
+    """段里本来就是地址，不必问实现端。"""
+
+    async def body():
+        url = await _milky_adapter().bot.media_url(Image(uri="http://cdn/x.jpg"))
+
+        assert url == "http://cdn/x.jpg"
+
+    scenario(body)
 
 
 def test_decode_group_message():
@@ -151,24 +198,131 @@ def test_encode_image_uses_uri():
 
 def test_roundtrip_text_message():
     event = decode_event(GROUP_MESSAGE)
-    encoded = encode_segments(event.content)
+    # 图片段带的是句柄，编码前要先过 resolve_handles —— 这里只看文本和 @
+    encoded = encode_segments(RichText(segments=event.content.segments[:2]))
 
     assert encoded[0] == {"type": "text", "data": {"text": "hello "}}
     assert encoded[1] == {"type": "mention", "data": {"user_id": 10001}}
 
 
-def test_media_roundtrip_restores_the_handle():
-    """收进来再发出去：``milky:`` 句柄要还原成 resource_id。
+def test_outgoing_media_is_sent_as_uri():
+    """出站媒体段只认 ``uri``。
 
-    以前会把 ``"milky:res-1"`` 原样塞进 ``uri`` 发出去，协议端认不出来。
+    ``IncomingSegment`` 给的是 ``resource_id``，而 ``OutgoingSegment`` 里
+    **根本没有这个字段**（见 protocol/src/ir/common.ts）—— 两边的媒体段是
+    两套结构，名字都不是一套。
     """
-    event = decode_event(GROUP_MESSAGE)
-    image = encode_segments(event.content)[2]
+    encoded = encode_segments(RichText(segments=[Image(uri="http://cdn/x.jpg")]))
 
-    assert image == {
-        "type": "image",
-        "data": {"resource_id": "res-1", "sub_type": "normal"},
-    }
+    assert encoded == [
+        {"type": "image", "data": {"uri": "http://cdn/x.jpg", "sub_type": "normal"}}
+    ]
+
+
+def test_unresolved_handle_is_refused_not_sent():
+    """句柄没解析过就编码，出站没有字段可填 —— 报错好过发出去。"""
+    with pytest.raises(UnresolvableUri):
+        encode_segments(RichText(segments=[Image(uri="milky:res-1")]))
+
+
+def test_resolve_handles_swaps_the_handle_for_a_temp_url(scenario):
+    """转发收到的媒体：先把句柄换成临时链接，再编码成 uri。"""
+
+    async def body():
+        from novalark.adapter.bot import set_current_bot
+        from novalark.adapter.milky.encode import resolve_handles
+
+        class FakeBot:
+            async def call(self, action, params):
+                assert action == "get_resource_temp_url"
+                assert params == {"resource_id": "res-1"}
+                return ActionResult(data={"url": "http://fresh/x.jpg"})
+
+        set_current_bot(FakeBot())  # type: ignore[arg-type]
+
+        event = decode_event(GROUP_MESSAGE)
+        resolved = await resolve_handles(event.content)
+
+        # 原段不动（句柄还在），换出来的是新对象
+        assert event.content.segments[2].uri == "milky:res-1"
+        assert resolved.segments[2].uri == "http://fresh/x.jpg"
+        assert encode_segments(resolved)[2] == {
+            "type": "image",
+            "data": {"uri": "http://fresh/x.jpg", "sub_type": "normal"},
+        }
+
+    scenario(body)
+
+
+def test_outgoing_media_drops_incoming_only_fields(scenario):
+    """width / height / resource_id 是入站专有的，不许回吐给出站结构。"""
+
+    async def body():
+        from novalark.adapter.bot import set_current_bot
+        from novalark.adapter.milky.encode import resolve_handles
+
+        class FakeBot:
+            async def call(self, action, params):
+                return ActionResult(data={"url": "http://fresh/x.jpg"})
+
+        set_current_bot(FakeBot())  # type: ignore[arg-type]
+
+        event = decode_event(
+            _segments(
+                {
+                    "type": "image",
+                    "data": {
+                        "resource_id": "res-1",
+                        "temp_url": "http://x/y.png",
+                        "width": 640,
+                        "height": 480,
+                        "summary": "预览",
+                    },
+                }
+            )
+        )
+        image = event.content.segments[0]
+        assert (image.width, image.height) == (640, 480)  # 模型层照收
+
+        encoded = encode_segments(await resolve_handles(event.content))[0]
+        assert encoded == {
+            "type": "image",
+            "data": {
+                "uri": "http://fresh/x.jpg",
+                "summary": "预览",
+                "sub_type": "normal",
+            },
+        }
+
+    scenario(body)
+
+
+def test_resolve_handles_reaches_forward_content(scenario):
+    """合并转发里的段一样要换 —— 转发内容也是段。"""
+
+    async def body():
+        from novalark.adapter.bot import set_current_bot
+        from novalark.adapter.milky.encode import resolve_handles
+
+        class FakeBot:
+            async def call(self, action, params):
+                return ActionResult(data={"url": "http://fresh/x.jpg"})
+
+        set_current_bot(FakeBot())  # type: ignore[arg-type]
+
+        forward = Forward(
+            messages=[
+                ForwardNode(
+                    user_id=1, name="小明", content=[Image(uri="milky:res-1")]
+                )
+            ]
+        )
+        resolved = await resolve_handles(RichText(segments=[forward]))
+        node = resolved.segments[0].messages[0]
+
+        assert node.content[0].uri == "http://fresh/x.jpg"
+
+    scenario(body)
 
 
 def test_foreign_handle_is_refused_not_sent():
@@ -177,7 +331,8 @@ def test_foreign_handle_is_refused_not_sent():
         encode_segments(RichText(segments=[Image(uri="onebot:abc.jpg")]))
 
 
-def test_market_face_roundtrip_keeps_url():
+def test_market_face_decodes_but_cannot_be_sent():
+    """``market_face`` 只在 ``IncomingSegment`` 里，出站没有这个变体。"""
     event = decode_event(
         _segments(
             {
@@ -192,7 +347,16 @@ def test_market_face_roundtrip_keeps_url():
             }
         )
     )
-    assert encode_segments(event.content)[0]["data"]["url"] == "http://cdn/e.png"
+    assert isinstance(event.content.segments[0], MarketFace)
+
+    with pytest.raises(UnsupportedSegment):
+        encode_segments(event.content)
+
+
+def test_file_segment_cannot_be_sent():
+    """Milky 没有出站的 ``file`` 段 —— 发文件走 ``upload_*`` API。"""
+    with pytest.raises(UnsupportedSegment):
+        encode_segments(RichText(segments=[File(uri="file:///tmp/a.txt")]))
 
 
 def test_reference_only_forward_survives_encoding():

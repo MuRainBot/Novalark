@@ -48,6 +48,10 @@ def encode_segments(content: RichText) -> list[dict[str, Any]]:
 #: 只摊 model_extra 的话收进来再发出去就掉了。
 _MEDIA_FIELDS = ("summary", "width", "height", "duration", "name", "size")
 
+#: 入站专有的键。decode 把整个 ``data`` 摊进模型，``url`` 是入站的原始键
+#: （模型里叫 ``temp_url``）；不剔掉的话出站会同时带上 ``file`` 和 ``url``。
+_INCOMING_ONLY = frozenset({"url"})
+
 
 def _encode_forward(seg: Forward) -> list[dict[str, Any]]:
     """合并转发展开成 node 段数组。
@@ -74,7 +78,11 @@ def _encode_forward(seg: Forward) -> list[dict[str, Any]]:
 
 def _media_data(seg: MediaSegment) -> dict[str, Any]:
     """媒体段的出站 data：协议扩展 + 自己的声明字段 + 内容标识。"""
-    data: dict[str, Any] = dict(seg.model_extra or {})
+    data: dict[str, Any] = {
+        key: value
+        for key, value in (seg.model_extra or {}).items()
+        if key not in _INCOMING_ONLY
+    }
     declared = type(seg).model_fields
     for field in _MEDIA_FIELDS:
         if field in declared and field not in data:
