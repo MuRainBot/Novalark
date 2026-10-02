@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Concatenate, Sequence, cast
 
 from ..model.events import MessageEvent
 from .depend import Depend, call_depend
@@ -8,6 +8,7 @@ from .deps import Depends
 
 if TYPE_CHECKING:
     from ..model.events import Event
+    from .subscription import E, P
 
 
 class Scope:
@@ -59,21 +60,26 @@ class Scope:
 
     def on(
         self,
-        event_type: type["Event"],
+        event_type: type[E],
         *,
         depends: Sequence[Depend | Callable[..., Any]] = (),
         priority: int | None = None,
-    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    ) -> Callable[
+        [Callable[Concatenate[E, P], Any]], Callable[Concatenate[Event, P], Any]
+    ]:
         """在这个作用域里订阅事件。条件叠加作用域自己的门禁。"""
         from .subscription import make_subscription, registry
 
-        def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
+        def decorator(
+            fn: Callable[Concatenate[E, P], Any],
+        ) -> Callable[Concatenate[Event, P], Any]:
             registry.add(
                 make_subscription(
                     event_type, fn, scope=self, depends=depends, priority=priority
                 )
             )
-            return fn
+            # 和 ``@on`` 同理：对外放宽，handler 叠几层时第二层才不会撞类型。
+            return cast("Callable[Concatenate[Event, P], Any]", fn)
 
         return decorator
 

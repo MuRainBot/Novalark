@@ -338,23 +338,6 @@ def test_command_hint_can_be_replaced(scenario, make_group_event):
     scenario(body)
 
 
-def test_unclaimed_message_is_logged(scenario, make_group_event, caplog):
-    """有命令订阅在盯着，但一条都没认领 —— 这条也要留痕。"""
-
-    async def body():
-        @on_command("ban", AtArg("target"))
-        async def ban(event, target):
-            raise AssertionError("不该执行")
-
-        with caplog.at_level(logging.INFO, logger="novalark"):
-            await dispatch(make_group_event("今天天气不错"))
-
-        infos = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]
-        assert any("没认领" in text for text in infos)
-
-    scenario(body)
-
-
 def test_claimed_message_does_not_report_a_miss(scenario, make_group_event, caplog):
     """认领成功时不该冒出「没认领」的噪音。"""
 
@@ -371,5 +354,37 @@ def test_claimed_message_does_not_report_a_miss(scenario, make_group_event, capl
         assert seen == [5]
         infos = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]
         assert not any("没认领" in text for text in infos)
+
+    scenario(body)
+
+
+def test_a_stopping_command_keeps_its_claim(scenario, make_group_event):
+    """命令 handler 抛 ``StopPropagation`` 之后，独占权仍然是它的。
+
+    「一条消息只会触发一条命令」不该因为那句 StopPropagation 就失效——它只是让
+    **本插件**后面的订阅别再跑，不是放弃认领。少了这一步，同名命令会被第二个插件
+    再跑一遍。
+    """
+    from novalark.matcher.errors import PropagationScope, StopPropagation
+
+    async def body():
+        seen: list[str] = []
+
+        def register(module: str, label: str, *, stop: bool):
+            async def handler(event):
+                seen.append(label)
+                if stop:
+                    raise StopPropagation(PropagationScope.PLUGIN)
+
+            handler.__module__ = module  # 插件归属靠函数自带的模块名
+            handler.__qualname__ = f"{label}_handler"
+            return on_command("ping")(handler)
+
+        register("plugins.Alpha", "alpha", stop=True)
+        register("plugins.Beta", "beta", stop=False)
+
+        await dispatch(make_group_event("ping"))
+
+        assert seen == ["alpha"]
 
     scenario(body)

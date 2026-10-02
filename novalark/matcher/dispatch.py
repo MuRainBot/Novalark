@@ -46,6 +46,8 @@ async def dispatch(event: "Event") -> None:
             if await subscription.invoke(event) and subscription.command is not None:
                 command_taken = True
         except StopPropagation as stop:
+            if subscription.command is not None:
+                command_taken = True
             if stop.scope is PropagationScope.GLOBAL:
                 logger.debug(
                     f"{subscription.handler.__name__} 阻断了 {type(event).__name__}"
@@ -58,11 +60,6 @@ async def dispatch(event: "Event") -> None:
             logger.exception(
                 f"订阅 {subscription.handler.__name__} 处理 {type(event).__name__} 时出错"
             )
-
-    # 「我的命令怎么不响应」的第三种情况：有命令订阅在盯着，但一条都没认领。
-    # 没有命令订阅参与时不记，否则普通聊天会把控制台刷满。
-    if command_candidates and not command_taken:
-        logger.debug(f"{command_candidates} 条命令订阅都没认领：{event.summary}")
 
 
 def emit(event: "Event") -> None:

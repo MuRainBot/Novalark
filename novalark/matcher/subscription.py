@@ -6,7 +6,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable, Sequence
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Concatenate,
+    ParamSpec,
+    Sequence,
+    TypeVar,
+)
 
 from ..command import report_miss
 from ..log import get_logger
@@ -23,6 +31,12 @@ if TYPE_CHECKING:
     from ..command import Command
     from ..model.events import Event
     from .scope import Scope
+
+#: 订阅的 handler：第一个参数是事件（由 ``on(event_type)`` 锚住），后面接
+#: ``Depends(...)`` 注入的那些值。给 ``@on`` 和 ``Scope.on`` 用，让 IDE
+#: 在写 handler 时就把第一个参数的类型推出来。
+E = TypeVar("E", bound="Event")
+P = ParamSpec("P")
 
 
 @dataclass

@@ -2,25 +2,27 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Concatenate, Sequence, cast
 
 from .depend import Depend, FromGroup, FuncDepend, ToMe, depends
 from .deps import Depends, DependencyPlan, build_plan, resolve
 from .dispatch import dispatch, emit
 from .errors import NotMatched, PropagationScope, StopPropagation
 from .scope import Scope
-from .subscription import Registry, Subscription, make_subscription, registry
+from .subscription import E, P, Registry, Subscription, make_subscription, registry
 
 if TYPE_CHECKING:
     from ..model.events import Event
 
 
 def on(
-    event_type: type["Event"],
+    event_type: type[E],
     *,
     depends: Sequence[Depend | Callable[..., Any]] | None = None,
     priority: int = 0,
-) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+) -> Callable[
+    [Callable[Concatenate[E, P], Any]], Callable[Concatenate[Event, P], Any]
+]:
     """订阅一个事件类型。
 
     ::
@@ -44,11 +46,15 @@ def on(
             task(event.reply("hi"))
     """
 
-    def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
+    def decorator(
+        fn: Callable[Concatenate[E, P], Any],
+    ) -> Callable[Concatenate[Event, P], Any]:
         registry.add(
             make_subscription(event_type, fn, depends=depends or (), priority=priority)
         )
-        return fn
+        # 对外放宽到「接受任意事件」：handler 叠几层 @on 就注册几条订阅，
+        # 收窄到 E 会让第二层装饰器撞上类型不兼容。
+        return cast("Callable[Concatenate[Event, P], Any]", fn)
 
     return decorator
 
