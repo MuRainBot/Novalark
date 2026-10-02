@@ -12,7 +12,6 @@ from typing import Any
 
 from ...model.message import RichText
 from ...model.segments import (
-    URL_SCHEMES,
     At,
     Face,
     Forward,
@@ -23,7 +22,7 @@ from ...model.segments import (
     Segment,
     Text,
     UnknownSegment,
-    UnresolvableUri,
+    protocol_uri,
 )
 from ..base import UnsupportedSegment
 from .segments import HANDLE_PREFIX, MEDIA_TYPES, temp_url
@@ -101,14 +100,14 @@ def _media_data(seg: MediaSegment) -> dict[str, Any]:
 def _outgoing_uri(seg: MediaSegment) -> str:
     """出站内容地址。
 
-    只认能直接访问的那几种。协议端句柄到这一步应该已经被
+    只认协议端认的那几种。协议端句柄到这一步应该已经被
     :func:`resolve_handles` 换掉了 —— ``OutgoingSegment`` 里没有
     ``resource_id`` 字段可填，硬发是发不出去的。
+
+    ``data:`` 由 :func:`protocol_uri` 转成 ``base64://``。
     """
     uri = seg.uri or seg.temp_url or ""
-    if not uri or uri.startswith(URL_SCHEMES):
-        return uri
-    raise UnresolvableUri(uri)
+    return protocol_uri(uri) if uri else uri
 
 
 def _encode_forward(seg: Forward) -> dict[str, Any]:

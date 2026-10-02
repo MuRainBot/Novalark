@@ -6,7 +6,9 @@
 
 from __future__ import annotations
 
+import base64
 from typing import TYPE_CHECKING, Any, ClassVar, Self
+from urllib.parse import unquote_to_bytes
 
 from pydantic import (
     BaseModel,
@@ -27,6 +29,12 @@ if TYPE_CHECKING:
 # uri 里这些前缀表示「本身就是个能访问的地址」
 URL_SCHEMES = ("http://", "https://", "file://", "base64://", "data:")
 
+#: 协议端认的内容地址前缀。比 :data:`URL_SCHEMES` 少一个 ``data:`` —— 那是
+#: Web 标准（RFC 2397），QQ 系协议只认 ``base64://``：Milky 的
+#: ``OutgoingSegment.uri`` 和 OneBot 的 ``file`` 都明说了
+#: ``file://`` / ``http(s)://`` / ``base64://`` 三种。
+PROTOCOL_SCHEMES = ("http://", "https://", "file://", "base64://")
+
 
 class UnresolvableUri(Exception):
     """``uri`` 是协议句柄，但当前适配器解不了它。
@@ -37,6 +45,31 @@ class UnresolvableUri(Exception):
     def __init__(self, uri: str) -> None:
         super().__init__(f"无法解析的资源标识: {uri!r}")
         self.uri = uri
+
+
+def protocol_uri(uri: str) -> str:
+    """把 ``data:`` URI 转成协议端认的 ``base64://``，本来就是地址的原样返回。
+
+    同一个内容两种写法，插件写哪边都该发得出去 —— 放进 ``uri`` 的 ``data:``
+    在模型层算「能访问的地址」，协议端却当场回一句 ``Unsupported URI scheme``，
+    失败点离写代码的地方太远。
+
+    不是地址（协议句柄等）抛 :class:`UnresolvableUri`，交给调用方原有的失败
+    路径。``data:`` 的两种正文都认：``;base64,`` 的直接用，百分号转义的先还原
+    成字节再编码 —— ``base64://`` 后面只能是裸 base64。
+    """
+    if uri.startswith(PROTOCOL_SCHEMES):
+        return uri
+    if not uri.startswith("data:"):
+        raise UnresolvableUri(uri)
+
+    header, comma, payload = uri[len("data:") :].partition(",")
+    if not comma:
+        # 没有逗号就不是 data URI，当句柄处理
+        raise UnresolvableUri(uri)
+    if header.endswith(";base64"):
+        return "base64://" + "".join(payload.split())
+    return "base64://" + base64.b64encode(unquote_to_bytes(payload)).decode("ascii")
 
 
 class Segment(BaseModel):

@@ -292,6 +292,28 @@ def test_forward_node_nested_segments_roundtrip():
     assert again.messages[0].content[1].user_id == 42
 
 
+def test_protocol_uri_turns_data_into_base64():
+    """``data:`` 是浏览器写法，协议端只吃 ``base64://``。"""
+    from novalark.model.segments import protocol_uri
+
+    assert protocol_uri("data:image/gif;base64,R0lGOD") == "base64://R0lGOD"
+    # 别的 mediatype 参数、带换行的正文都照转
+    assert protocol_uri("data:image/png;charset=utf-8;base64,AA\nBB") == (
+        "base64://AABB"
+    )
+    # 没有 ``;base64`` 的正文是百分号转义，先还原再编码
+    assert protocol_uri("data:text/plain,hi%20there") == "base64://aGkgdGhlcmU="
+
+    # 本来就是地址的原样返回
+    for uri in ("http://cdn/x.jpg", "file:///tmp/x.jpg", "base64://R0lGOD"):
+        assert protocol_uri(uri) == uri
+
+    # 不是地址的就是句柄，报错交给调用方
+    for uri in ("milky:res-1", "data:image/gif", ""):
+        with pytest.raises(UnresolvableUri):
+            protocol_uri(uri)
+
+
 def test_unbound_bot_raises_clearly():
     conversation = ConversationRef(scene=MessageScene.GROUP, peer_id=1)
     event = GroupMessageEvent(

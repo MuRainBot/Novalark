@@ -225,6 +225,20 @@ def test_unresolved_handle_is_refused_not_sent():
         encode_segments(RichText(segments=[Image(uri="milky:res-1")]))
 
 
+def test_data_uri_is_sent_as_base64():
+    """``data:`` 是模型层认的地址，Milky 却只认 ``base64://`` —— 编码时转一道。
+
+    不转就是协议端一句 ``Unsupported URI scheme``，报错点在网络那头。
+    """
+    encoded = encode_segments(
+        RichText(segments=[Image(uri="data:image/gif;base64,R0lGOD")])
+    )
+
+    assert encoded == [
+        {"type": "image", "data": {"uri": "base64://R0lGOD", "sub_type": "normal"}}
+    ]
+
+
 def test_resolve_handles_swaps_the_handle_for_a_temp_url(scenario):
     """转发收到的媒体：先把句柄换成临时链接，再编码成 uri。"""
 
