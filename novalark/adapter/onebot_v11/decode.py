@@ -17,17 +17,13 @@ from ...model.entities import (
 )
 from ...model.enums import ImageSubType
 from ...model.events import (
-    ClientStatusEvent,
     Event,
     FileUploadEvent,
     FriendAddEvent,
     FriendMessageEvent,
-    FriendNudgeEvent,
     FriendRecallEvent,
     FriendRequestEvent,
     GroupAdminEvent,
-    GroupCardEvent,
-    GroupEssenceEvent,
     GroupHonorEvent,
     GroupLuckyKingEvent,
     GroupMemberDecreaseEvent,
@@ -42,7 +38,6 @@ from ...model.events import (
     HeartbeatEvent,
     LifecycleEvent,
     MessageEvent,
-    OfflineFileEvent,
     TempMessageEvent,
     UnknownEvent,
 )
@@ -86,13 +81,8 @@ def decode_event(data: dict[str, Any]) -> Event:
     }
 
     match post_type:
-        case "message" | "message_sent":
-            try:
-                return _decode_message(
-                    data, is_self=post_type == "message_sent", **common
-                )
-            except Exception:
-                return UnknownEvent(kind="ob11:message", **common)
+        case "message":
+            return _guard(_decode_message, data, "ob11:message", **common)
         case "notice":
             return _guard(_decode_notice, data, "ob11:notice", **common)
         case "request":
@@ -197,13 +187,6 @@ def _decode_notice(data: dict[str, Any], **common: Any) -> Event:
             )
         case "friend_add":
             return FriendAddEvent(user_id=user_id, **common)
-        case "group_card":
-            return GroupCardEvent(
-                group_id=group_id,
-                user_id=user_id,
-                card=str(data.get("card") or ""),
-                **common,
-            )
         case "group_upload":
             return FileUploadEvent(
                 group_id=group_id,
@@ -213,29 +196,6 @@ def _decode_notice(data: dict[str, Any], **common: Any) -> Event:
                 size=to_int(file_field("size", 0)),
                 **common,
             )
-        case "essence":
-            return GroupEssenceEvent(
-                group_id=group_id,
-                ref=_group_ref(group_id, data),
-                sender_id=to_int(data.get("sender_id")),
-                operator_id=operator_id,
-                is_set=sub_type == "add",
-                **common,
-            )
-        case "offline_file":
-            return OfflineFileEvent(
-                user_id=user_id,
-                name=str(file_field("name")),
-                size=to_int(file_field("size", 0)),
-                url=str(file_field("url")),
-                **common,
-            )
-        case "client_status":
-            raw_client = data.get("client")
-            online = (
-                raw_client.get("online", True) if isinstance(raw_client, dict) else True
-            )
-            return ClientStatusEvent(online=bool(online), **common)
         case "notify":
             return _decode_notify(sub_type, data, **common)
         case _:
@@ -250,15 +210,15 @@ def _decode_notify(sub_type: str, data: dict[str, Any], **common: Any) -> Event:
 
     match sub_type:
         case "poke":
-            if group_id:
-                return GroupNudgeEvent(
-                    group_id=group_id,
-                    sender_id=user_id,
-                    receiver_id=target_id,
-                    **common,
-                )
-            return FriendNudgeEvent(
-                user_id=user_id, sender_id=user_id, receiver_id=target_id, **common
+            # 标准只定义了「群内戳一戳」，没有 group_id 的私聊形态是实现端
+            # 自己扩的
+            if not group_id:
+                return UnknownEvent(kind="ob11:notice:notify:poke", **common)
+            return GroupNudgeEvent(
+                group_id=group_id,
+                sender_id=user_id,
+                receiver_id=target_id,
+                **common,
             )
         case "lucky_king":
             return GroupLuckyKingEvent(
@@ -342,16 +302,13 @@ def _decode_meta(data: dict[str, Any], **common: Any) -> Event:
 # ── 消息 ───────────────────────────────────────────────────
 
 
-def _decode_message(
-    data: dict[str, Any], *, is_self: bool, **common: Any
-) -> MessageEvent:
+def _decode_message(data: dict[str, Any], **common: Any) -> MessageEvent:
     conversation = _decode_conversation(data)
     ref = MessageRef(conversation=conversation, seq=to_int(data.get("message_id")))
     message = Message(
         ref=ref,
         content=_decode_content(data.get("message"), conversation),
         sender=_decode_sender(data.get("sender"), data.get("user_id")),
-        is_self=is_self,
     )
 
     cls = {
@@ -433,7 +390,7 @@ def _decode_segment(data: Any, conversation: ConversationRef) -> Segment:
         case "reply":
             ref = MessageRef(conversation=conversation, seq=to_int(payload.get("id")))
             return Reply.model_validate({**payload, "raw": raw, "ref": ref})
-        case "image" | "record" | "video" | "file":
+        case "image" | "record" | "video":
             cls = MEDIA_CLASSES[seg_type]
             return cls.model_validate(
                 {
@@ -567,10 +524,5 @@ def _media_fields(seg_type: str, payload: dict[str, Any]) -> dict[str, Any]:
             "duration": to_int(payload.get("duration")),
             "width": int_or_none(payload.get("width")),
             "height": int_or_none(payload.get("height")),
-        }
-    if seg_type == "file":
-        return {
-            "name": str(payload.get("file_name") or ""),
-            "size": to_int(payload.get("file_size")),
         }
     return {}

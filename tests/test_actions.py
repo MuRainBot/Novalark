@@ -264,6 +264,20 @@ def test_onebot_reports_what_it_cannot_do(scenario):
         with pytest.raises(UnsupportedAction, match="精华"):
             await bot.set_essence(MessageRef(conversation=GROUP, seq=1))
 
+        # 下面这些是 go-cqhttp 一系的扩展接口，不在 OneBot 11 标准里，
+        # 别的实现端上多半也没有 —— 与其发个没人认的 action，不如报错
+        with pytest.raises(UnsupportedAction, match="历史消息"):
+            await bot.get_history(GROUP)
+
+        with pytest.raises(UnsupportedAction, match="删除好友"):
+            await bot.delete_friend(999)
+
+        with pytest.raises(UnsupportedAction, match="修改昵称"):
+            await bot.set_nickname("新名字")
+
+        with pytest.raises(UnsupportedAction, match="修改签名"):
+            await bot.set_bio("新签名")
+
     scenario(body)
 
 
@@ -301,6 +315,12 @@ def test_milky_covers_what_onebot_lacks(scenario):
         await bot.like_profile(999, count=5)
         assert rec.params == {"user_id": 999, "count": 5}
 
+        # 改昵称在 OneBot 标准里没有（那边叫 set_qq_profile，是实现端扩展），
+        # Milky 有 —— 直接用 Milky 自己的定义
+        await bot.set_nickname("新名字")
+        assert rec.action == "set_nickname"
+        assert rec.params == {"nickname": "新名字"}
+
     scenario(body)
 
 
@@ -321,10 +341,6 @@ def test_onebot_still_covers_the_standard_ones(scenario):
         await bot.like_profile(999)
         assert rec.action == "send_like"
         assert rec.params == {"user_id": 999, "times": 1}
-
-        await bot.set_nickname("新名字")
-        assert rec.action == "set_qq_profile"
-        assert rec.params == {"nickname": "新名字"}
 
     scenario(body)
 

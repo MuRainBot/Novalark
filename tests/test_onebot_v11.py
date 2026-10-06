@@ -4,17 +4,20 @@ from __future__ import annotations
 
 import pytest
 
+from novalark import UnsupportedSegment
 from novalark.adapter import get_adapter_entry
 from novalark.adapter.onebot_v11.decode import decode_event
 from novalark.adapter.onebot_v11.encode import encode_segments
 from novalark.model import (
     At,
     Face,
+    File,
     FriendRequestEvent,
     GroupMemberDecreaseEvent,
     GroupMuteEvent,
     GroupInviteRequestEvent,
     GroupJoinRequestEvent,
+    GroupNudgeEvent,
     GroupRecallEvent,
     GroupWholeMuteEvent,
     Forward,
@@ -90,9 +93,13 @@ def test_decode_private_and_temp_are_distinct():
     assert temp.conversation.scene is MessageScene.TEMP
 
 
-def test_decode_message_sent_sets_is_self():
-    assert decode_event({**GROUP_MESSAGE, "post_type": "message_sent"}).is_self is True
-    assert decode_event(GROUP_MESSAGE).is_self is False
+def test_non_standard_post_type_degrades_to_unknown():
+    """标准只有 message / notice / request / meta_event 四种 post_type。"""
+    event = decode_event({**GROUP_MESSAGE, "post_type": "message_sent"})
+
+    assert isinstance(event, UnknownEvent)
+    assert event.kind == "ob11:message_sent"
+    assert event.raw["message_id"] == 42  # 原文留着
 
 
 def test_decode_cq_string_keeps_non_text_content():
@@ -186,6 +193,14 @@ def test_encode_media_reads_uri_and_strips_prefix():
     assert encoded == [{"type": "image", "data": {"file": "http://cdn/x.jpg"}}]
 
 
+def test_encode_media_turns_data_uri_into_base64():
+    """``data:`` 是模型层认的地址，OneBot 标准里没有 —— 出站转成 ``base64://``。"""
+    encoded = encode_segments(
+        RichText(segments=[Image(uri="data:image/gif;base64,R0lGOD")])
+    )
+    assert encoded == [{"type": "image", "data": {"file": "base64://R0lGOD"}}]
+
+
 def test_media_roundtrips_through_onebot():
     """收进来再发出去，file 不变。
 
@@ -262,16 +277,19 @@ def test_onebot_media_resolves_handle_via_api(scenario):
     scenario(body)
 
 
-def test_onebot_file_handle_is_unresolvable(scenario):
-    """OneBot 没有按 file_id 取下载地址的接口，调用时报错。"""
+def test_file_segment_is_not_standard():
+    """标准消息段里没有 file：收进来降级成未知段，发出去报错。"""
+    event = decode_event(
+        {**GROUP_MESSAGE, "message": [{"type": "file", "data": {"file": "f1"}}]}
+    )
+    seg = event.content.segments[0]
 
-    async def body():
-        from novalark.adapter.onebot_v11.segments import OneBotFile
+    assert isinstance(seg, UnknownSegment)
+    assert seg.type == "file"
+    assert seg.model_dump() == {"type": "file", "data": {"file": "f1"}}
 
-        with pytest.raises(UnresolvableUri):
-            await OneBotFile(uri="onebot:file-123").get_url()
-
-    scenario(body)
+    with pytest.raises(UnsupportedSegment, match="file"):
+        encode_segments(RichText(segments=[File(uri="f1")]))
 
 
 def test_face_roundtrips_and_has_neutral_defaults():
@@ -405,6 +423,28 @@ def test_whole_mute_is_split_from_member_mute():
     )
     assert isinstance(member, GroupMuteEvent)
     assert member.duration == 600
+
+
+def test_poke_is_only_defined_inside_a_group():
+    """标准只定义了「群内戳一戳」，没有 group_id 的形态是实现端扩展。"""
+    group = decode_event(
+        {**NOTICE, "notice_type": "notify", "sub_type": "poke", "target_id": 7}
+    )
+    assert isinstance(group, GroupNudgeEvent)
+    assert group.group_id == 12345
+    assert group.receiver_id == 7
+
+    loose = decode_event(
+        {
+            **NOTICE,
+            "notice_type": "notify",
+            "sub_type": "poke",
+            "group_id": 0,
+            "target_id": 7,
+        }
+    )
+    assert isinstance(loose, UnknownEvent)
+    assert loose.kind == "ob11:notice:notify:poke"
 
 
 def test_requests_are_typed_with_their_flag():

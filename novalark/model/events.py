@@ -243,14 +243,6 @@ class GroupDisbandEvent(GroupEvent):
     operator_id: int = 0
 
 
-class GroupCardEvent(GroupEvent):
-    """群名片被改。"""
-
-    kind: str = "group_card"
-    user_id: int = 0
-    card: str = ""
-
-
 class GroupReactionEvent(GroupEvent):
     """群消息上的表情回应。"""
 
@@ -447,25 +439,6 @@ class GroupLuckyKingEvent(GroupEvent):
     kind: str = "group_lucky_king"
     user_id: int = 0
     target_id: int = 0
-
-
-class OfflineFileEvent(Event):
-    """离线文件。"""
-
-    kind: str = "offline_file"
-    user_id: int = 0
-    name: str = ""
-    size: int = 0
-    url: str = ""
-
-
-class ClientStatusEvent(Event):
-    """客户端在线状态变化。"""
-
-    kind: str = "client_status"
-    online: bool = True
-
-    notable: ClassVar[bool] = False
 
 
 # ── 框架生命周期 ───────────────────────────────────────────

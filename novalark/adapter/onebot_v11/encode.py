@@ -9,12 +9,12 @@ from typing import Any
 
 from ...model.message import RichText
 from ...model.segments import (
-    URL_SCHEMES,
     Anonymous,
     At,
     Contact,
     Dice,
     Face,
+    File,
     Forward,
     LightApp,
     Location,
@@ -28,9 +28,10 @@ from ...model.segments import (
     Share,
     Text,
     UnknownSegment,
-    UnresolvableUri,
     Xml,
+    protocol_uri,
 )
+from ..base import UnsupportedSegment
 
 
 def encode_segments(content: RichText) -> list[dict[str, Any]]:
@@ -46,7 +47,7 @@ def encode_segments(content: RichText) -> list[dict[str, Any]]:
 
 #: 媒体段自己的声明字段。decode 把它们写成了字段（不是 model_extra），
 #: 只摊 model_extra 的话收进来再发出去就掉了。
-_MEDIA_FIELDS = ("summary", "width", "height", "duration", "name", "size")
+_MEDIA_FIELDS = ("summary", "width", "height", "duration")
 
 #: 入站专有的键。decode 把整个 ``data`` 摊进模型，这些键出站结构里没有；
 #: 不剔掉的话「收进来再发出去」会把它们原样回吐。
@@ -113,7 +114,12 @@ def _encode_segment(seg: Segment) -> dict[str, Any]:
                 "data": {"id": str(seg.ref.seq) if seg.ref else ""},
             }
 
-        # 图片 / 语音 / 视频 / 文件：OneBot 一律走 file 字段
+        # 标准里没有 file 段，发出去实现端认不认没有定义 —— 报错好过让
+        # 调用方以为发出去了
+        case File():
+            raise UnsupportedSegment(seg.type, "OneBot V11")
+
+        # 图片 / 语音 / 视频：OneBot 一律走 file 字段
         case MediaSegment():
             return {"type": seg.type, "data": _media_data(seg)}
 
@@ -230,13 +236,13 @@ def _compact(data: dict[str, Any]) -> dict[str, Any]:
 def _onebot_file(seg: MediaSegment) -> str:
     """uri 转回 OneBot 的 ``file``。
 
-    ``onebot:`` 是收来的协议端句柄，脱掉前缀；地址原样送。别的协议的句柄
-    （Milky 的 ``milky:res-1``）实现端认不出来，报错让调用方先去
+    ``onebot:`` 是收来的协议端句柄，脱掉前缀；地址走 :func:`protocol_uri` ——
+    标准里发送时写死的就三种（``file://`` 绝对路径、网络 URL、``base64://``，
+    见 message/segment.md 图片段脚注），``data:`` 会被实现端拒掉。别的协议的
+    句柄（Milky 的 ``milky:res-1``）实现端认不出来，报错让调用方先去
     ``await seg.get_url()``。
     """
     uri = seg.uri or seg.temp_url or ""
     if uri.startswith("onebot:"):
         return uri.removeprefix("onebot:")
-    if not uri or uri.startswith(URL_SCHEMES):
-        return uri
-    raise UnresolvableUri(uri)
+    return protocol_uri(uri) if uri else uri

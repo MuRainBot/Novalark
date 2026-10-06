@@ -10,7 +10,6 @@ import logging
 
 from novalark import (
     Bot,
-    ClientStatusEvent,
     ConversationRef,
     Event,
     HeartbeatEvent,
@@ -41,7 +40,6 @@ def test_notable_defaults_to_true():
     """默认都值得记 info，高频的才降级。"""
     assert Event.notable is True
     assert HeartbeatEvent.notable is False
-    assert ClientStatusEvent.notable is False
 
 
 def test_conversation_display_is_readable():

@@ -24,11 +24,6 @@ from ...model.entities import (
     User,
 )
 from ...model.enums import ActionStatus, HonorType
-from ...model.events import (
-    FriendRequestEvent,
-    GroupInviteRequestEvent,
-    GroupRequestEvent,
-)
 from ...model.message import Message, RichText
 from ...model.segments import ForwardNode
 from ...model.refs import ConversationRef, MessageRef, MessageScene
@@ -59,13 +54,10 @@ _HONOR_TYPES = {
 }
 
 
-def _node_field(item: dict[str, Any], key: str) -> Any:
-    """转发节点里的字段可能摊在顶层，也可能嵌在 ``sender`` 里。"""
-    direct = item.get(key)
-    if direct:
-        return direct
-    sender = item.get("sender")
-    return sender.get(key) if isinstance(sender, dict) else None
+def _node_data(item: Any) -> dict[str, Any] | None:
+    """合并转发响应里的一个 node 段：``{"type": "node", "data": {...}}``。"""
+    raw = item.get("data") if isinstance(item, dict) else None
+    return raw if isinstance(raw, dict) else None
 
 
 @register_adapter("onebot_v11", config=OneBotV11Config)
@@ -324,52 +316,28 @@ class OneBotV11Adapter(Adapter):
             sender=_decode_sender(raw.get("sender"), 0),
         )
 
-    async def get_history(
-        self, conversation: ConversationRef, count: int = 20
-    ) -> list[Message]:
-        if conversation.scene is MessageScene.GROUP:
-            action = "get_group_msg_history"
-            params: dict[str, Any] = {"group_id": conversation.peer_id, "count": count}
-        else:
-            action = "get_friend_msg_history"
-            params = {"user_id": conversation.peer_id, "count": count}
-
-        data = (await self.call(action, params)).unwrap()
-        raw = data if isinstance(data, dict) else {}
-        items = raw.get("messages")
-        if not isinstance(items, list):
-            return []
-
-        return [
-            Message(
-                ref=MessageRef(
-                    conversation=conversation, seq=to_int(item.get("message_id"))
-                ),
-                content=_decode_content(item.get("message"), conversation),
-                sender=_decode_sender(item.get("sender"), 0),
-            )
-            for item in items
-            if isinstance(item, dict)
-        ]
-
     async def get_forwarded(self, forward_id: str) -> list[ForwardNode]:
+        # 标准响应是 ``{"message": [...]}``，里面每个 node 段的 ``data`` 里放着
+        # 发送者和内容；标准没有给时间，``ForwardNode.time`` 保持默认。
         data = (await self.call("get_forward_msg", {"id": forward_id})).unwrap()
         raw = data if isinstance(data, dict) else {}
-        items = raw.get("messages")
-        return [
-            ForwardNode.model_validate(
-                {
-                    "user_id": to_int(_node_field(item, "user_id")),
-                    "name": str(_node_field(item, "nickname") or ""),
-                    "time": to_int(item.get("time")),
-                    "content": _decode_content(
-                        item.get("content") or item.get("message"), _GROUP_PLACEHOLDER
+        items = raw.get("message")
+
+        out: list[ForwardNode] = []
+        for item in items if isinstance(items, list) else []:
+            node = _node_data(item)
+            if node is None:
+                continue
+            out.append(
+                ForwardNode(
+                    user_id=to_int(node.get("user_id")),
+                    name=str(node.get("nickname") or ""),
+                    content=_decode_content(
+                        node.get("content"), _GROUP_PLACEHOLDER
                     ).segments,
-                }
+                )
             )
-            for item in (items if isinstance(items, list) else [])
-            if isinstance(item, dict)
-        ]
+        return out
 
     # ── 群 ─────────────────────────────────────────────────
 
@@ -406,21 +374,12 @@ class OneBotV11Adapter(Adapter):
 
     # ── 好友与账号 ─────────────────────────────────────────
 
-    async def delete_friend(self, user_id: int) -> None:
-        (await self.call("delete_friend", {"user_id": user_id})).unwrap()
-
     async def get_user_info(self, user_id: int) -> User:
         data = (await self.call("get_stranger_info", {"user_id": user_id})).unwrap()
         return User.model_validate(data if isinstance(data, dict) else {})
 
     async def like_profile(self, user_id: int, count: int = 1) -> None:
         (await self.call("send_like", {"user_id": user_id, "times": count})).unwrap()
-
-    async def set_nickname(self, nickname: str) -> None:
-        (await self.call("set_qq_profile", {"nickname": nickname})).unwrap()
-
-    async def set_bio(self, bio: str) -> None:
-        (await self.call("set_qq_profile", {"personal_note": bio})).unwrap()
 
     # ── 实现端与账号 ───────────────────────────────────────
 
