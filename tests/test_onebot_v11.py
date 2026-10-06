@@ -74,6 +74,7 @@ def test_decode_group_message():
     assert event.sender.is_admin
     assert event.ref.seq == 42
     assert event.conversation.scene is MessageScene.GROUP
+    assert event.message.time == 1700000000  # 消息自己的发送时间
 
 
 def test_decode_private_and_temp_are_distinct():

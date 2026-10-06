@@ -173,6 +173,7 @@ class Message(BaseModel):
     ref: MessageRef
     content: RichText
     sender: Sender
+    time: int = 0
     is_self: bool = False
 
     @property

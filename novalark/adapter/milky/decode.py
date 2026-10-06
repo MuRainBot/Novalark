@@ -358,6 +358,8 @@ def _decode_message(
         sender=_decode_sender(data, scene, sender_id),
         # Milky 把自己的消息也推进来，靠发送者是不是自己来区分
         is_self=sender_id == self_id,
+        # 参数里的 time 是事件时间（给 Event 用），消息自己的发送时间在消息里
+        time=to_int(data.get("time")),
     )
     return _SCENES[scene](message=message, time=time, self_id=self_id, **common)
 

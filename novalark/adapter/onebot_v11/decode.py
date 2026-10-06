@@ -309,6 +309,8 @@ def _decode_message(data: dict[str, Any], **common: Any) -> MessageEvent:
         ref=ref,
         content=_decode_content(data.get("message"), conversation),
         sender=_decode_sender(data.get("sender"), data.get("user_id")),
+        # 消息事件的 time 就是消息发送时间
+        time=to_int(data.get("time")),
     )
 
     cls = {

@@ -314,6 +314,7 @@ class OneBotV11Adapter(Adapter):
             ref=ref,
             content=_decode_content(raw.get("message"), ref.conversation),
             sender=_decode_sender(raw.get("sender"), 0),
+            time=to_int(raw.get("time")),
         )
 
     async def get_forwarded(self, forward_id: str) -> list[ForwardNode]:

@@ -329,7 +329,11 @@ def test_onebot_still_covers_the_standard_ones(scenario):
 
     async def body():
         rec = Recorder(
-            {"message_id": 42, "message": [{"type": "text", "data": {"text": "hi"}}]}
+            {
+                "message_id": 42,
+                "time": 1700000000,
+                "message": [{"type": "text", "data": {"text": "hi"}}],
+            }
         )
         bot = (await _onebot(rec)).bot
 
@@ -337,6 +341,7 @@ def test_onebot_still_covers_the_standard_ones(scenario):
         assert rec.action == "get_msg"
         assert msg.plain_text == "hi"
         assert msg.ref.seq == 42  # 坐标用调用方给的，不从返回里推
+        assert msg.time == 1700000000  # 时间得从返回里拿，坐标里没有
 
         await bot.like_profile(999)
         assert rec.action == "send_like"

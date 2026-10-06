@@ -745,6 +745,7 @@ def _to_message(data: Any, self_id: int) -> Message:
             ),
             content=RichText(),
             sender=Sender(user_id=to_int(raw.get("sender_id"))),
+            time=to_int(raw.get("time")),
         )
 
 

@@ -60,6 +60,7 @@ def mk(segments: list[dict[str, Any]]):
                 "peer_id": 12345,
                 "message_seq": 42,
                 "sender_id": 999,
+                "time": 1,
                 "segments": segments,
             },
         }
@@ -261,6 +262,17 @@ _GROUP_REQUESTS = [
         ),
     ),
 ]
+
+
+def test_message_carries_its_own_send_time():
+    """消息的发送时间要落到 ``Message.time``。
+
+    坐标里没有时间，历史消息（``get_history`` / ``get_msg``）又是脱离事件
+    拿回来的，插件想排序、算延迟只能看这儿。
+    """
+    segment = [{"type": "text", "data": {"text": "hi"}}]
+    assert ob(segment).message.time == 1
+    assert mk(segment).message.time == 1
 
 
 @pytest.mark.parametrize(
