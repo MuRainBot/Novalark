@@ -23,15 +23,17 @@ from ..model.entities import (
     Group,
     GroupAnnouncement,
     GroupFile,
+    GroupFileList,
     GroupHonor,
     GroupMember,
+    GroupNotificationPage,
     GroupRequest,
     ImplInfo,
     User,
 )
-from ..model.enums import ActionStatus, HonorType
+from ..model.enums import ActionStatus, HonorType, ReactionType
 from ..model.events import Event
-from ..model.message import Message, RichText
+from ..model.message import Message, MessagePage, RichText
 from ..model.refs import ConversationRef, MessageRef
 from ..model.segments import URL_SCHEMES, ForwardNode, MediaSegment, UnresolvableUri
 from ._util import brief, to_int
@@ -182,25 +184,33 @@ class Adapter(ABC):
         """退群。"""
 
     # ── 查询 ───────────────────────────────────────────────
+    #
+    # ``no_cache`` 是个**提示**参数：让实现端绕过自己的缓存重查。认不认只看
+    # 实现端内部策略，最坏结果是拿到略旧的数据 —— 所以不支持的实现端忽略它，
+    # 而不是报错。这跟 ``start_seq`` 那种改变「能不能做到」的能力参数不同。
 
     @abstractmethod
-    async def get_group(self, group_id: int) -> Group:
+    async def get_group(self, group_id: int, *, no_cache: bool = False) -> Group:
         """查一个群。"""
 
     @abstractmethod
-    async def get_groups(self) -> list[Group]:
+    async def get_groups(self, *, no_cache: bool = False) -> list[Group]:
         """查加入的所有群。"""
 
     @abstractmethod
-    async def get_group_member(self, group_id: int, user_id: int) -> GroupMember:
+    async def get_group_member(
+        self, group_id: int, user_id: int, *, no_cache: bool = False
+    ) -> GroupMember:
         """查一个群成员。"""
 
     @abstractmethod
-    async def get_group_members(self, group_id: int) -> list[GroupMember]:
+    async def get_group_members(
+        self, group_id: int, *, no_cache: bool = False
+    ) -> list[GroupMember]:
         """查群成员列表。"""
 
     @abstractmethod
-    async def get_friends(self) -> list[Friend]:
+    async def get_friends(self, *, no_cache: bool = False) -> list[Friend]:
         """查好友列表。"""
 
     # ── 消息 ───────────────────────────────────────────────
@@ -221,14 +231,24 @@ class Adapter(ABC):
         """把句柄换成地址。做不到抛 ``UnresolvableUri``。"""
         raise UnresolvableUri(segment.uri)
 
-    async def send_nudge(self, conversation: ConversationRef, user_id: int) -> None:
-        """戳一戳。"""
+    async def send_nudge(
+        self, conversation: ConversationRef, user_id: int, *, is_self: bool = False
+    ) -> None:
+        """戳一戳。``is_self`` 表示戳自己（只有 Milky 认）。"""
         raise UnsupportedAction("戳一戳", self.name)
 
     async def send_reaction(
-        self, ref: MessageRef, face_id: str, *, add: bool = True
+        self,
+        ref: MessageRef,
+        face_id: str,
+        *,
+        add: bool = True,
+        reaction_type: ReactionType = ReactionType.FACE,
     ) -> None:
-        """给消息加表情回应（或取消）。"""
+        """给消息加表情回应（或取消）。
+
+        ``reaction_type`` 区分 QQ 表情和 emoji（只有 Milky 认）。
+        """
         raise UnsupportedAction("表情回应", self.name)
 
     async def get_message(self, ref: MessageRef) -> Message:
@@ -236,9 +256,17 @@ class Adapter(ABC):
         raise UnsupportedAction("取消息", self.name)
 
     async def get_history(
-        self, conversation: ConversationRef, count: int = 20
-    ) -> list[Message]:
-        """取最近的历史消息，从新到旧。"""
+        self,
+        conversation: ConversationRef,
+        count: int = 20,
+        *,
+        start_seq: int | None = None,
+    ) -> MessagePage:
+        """取历史消息，**从新到旧**。
+
+        ``start_seq`` 是往前翻的游标：把上一页的 ``page.next_seq`` 原样传回来
+        就是下一页，``None`` 表示从最新一条开始。
+        """
         raise UnsupportedAction("取历史消息", self.name)
 
     async def get_forwarded(self, forward_id: str) -> list[ForwardNode]:
@@ -281,8 +309,10 @@ class Adapter(ABC):
         """设精华或取消精华。"""
         raise UnsupportedAction("设置精华", self.name)
 
-    async def get_group_files(self, group_id: int) -> list[GroupFile]:
-        """取群文件列表。"""
+    async def get_group_files(
+        self, group_id: int, *, folder_id: str = "/"
+    ) -> GroupFileList:
+        """取一个文件夹下的内容（文件和子文件夹）。"""
         raise UnsupportedAction("取群文件", self.name)
 
     async def get_honor(
@@ -393,7 +423,7 @@ class Adapter(ABC):
         """取自定义表情的 URL 列表。"""
         raise UnsupportedAction("取自定义表情", self.name)
 
-    async def get_friend_info(self, user_id: int) -> Friend:
+    async def get_friend_info(self, user_id: int, *, no_cache: bool = False) -> Friend:
         """取好友资料（带备注、分组），比 :meth:`get_user_info` 更贴近好友列表。"""
         raise UnsupportedAction("取好友资料", self.name)
 
@@ -406,12 +436,18 @@ class Adapter(ABC):
         raise UnsupportedAction("取好友申请列表", self.name)
 
     async def get_group_notifications(
-        self, limit: int = 20, *, filtered: bool = False
-    ) -> list[dict[str, Any]]:
+        self,
+        limit: int = 20,
+        *,
+        filtered: bool = False,
+        start_seq: int | None = None,
+    ) -> GroupNotificationPage:
         """取群通知（入群申请、管理员变更…），按序列号从新到旧。
 
         通知的种类太多（入群请求、邀请、踢人、退群、管理员变更），各类型用到
         的字段不一样，这里原样给协议记录的字段，按 ``type`` 判别。
+
+        ``start_seq`` 是翻页游标，用法同 :meth:`get_history`。
         """
         raise UnsupportedAction("取群通知列表", self.name)
 
@@ -421,7 +457,7 @@ class Adapter(ABC):
         """删好友。"""
         raise UnsupportedAction("删除好友", self.name)
 
-    async def get_user_info(self, user_id: int) -> User:
+    async def get_user_info(self, user_id: int, *, no_cache: bool = False) -> User:
         """查某人的资料。"""
         raise UnsupportedAction("查用户资料", self.name)
 

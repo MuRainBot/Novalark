@@ -9,15 +9,16 @@ from ..model.entities import (
     FriendRequest,
     Group,
     GroupAnnouncement,
-    GroupFile,
+    GroupFileList,
     GroupHonor,
     GroupMember,
+    GroupNotificationPage,
     GroupRequest,
     ImplInfo,
     User,
 )
-from ..model.enums import HonorType
-from ..model.message import Content, Message, RichText
+from ..model.enums import HonorType, ReactionType
+from ..model.message import Content, Message, MessagePage, RichText
 from ..model.refs import ConversationRef, MessageRef
 from ..model.segments import ForwardNode, MediaSegment
 
@@ -166,47 +167,67 @@ class Bot:
 
     # ── 查询 ───────────────────────────────────────────────
 
-    async def get_group(self, group_id: int) -> Group:
-        """查一个群。每次都发请求，要缓存自己在插件里拿捏。"""
-        return await self.adapter.get_group(group_id)
+    async def get_group(self, group_id: int, *, no_cache: bool = False) -> Group:
+        """查一个群。``no_cache`` 要求实现端绕过自己的缓存重查。"""
+        return await self.adapter.get_group(group_id, no_cache=no_cache)
 
-    async def get_groups(self) -> list[Group]:
+    async def get_groups(self, *, no_cache: bool = False) -> list[Group]:
         """查加入的所有群。"""
-        return await self.adapter.get_groups()
+        return await self.adapter.get_groups(no_cache=no_cache)
 
-    async def get_group_member(self, group_id: int, user_id: int) -> GroupMember:
+    async def get_group_member(
+        self, group_id: int, user_id: int, *, no_cache: bool = False
+    ) -> GroupMember:
         """查一个群成员。"""
-        return await self.adapter.get_group_member(group_id, user_id)
+        return await self.adapter.get_group_member(group_id, user_id, no_cache=no_cache)
 
-    async def get_group_members(self, group_id: int) -> list[GroupMember]:
+    async def get_group_members(
+        self, group_id: int, *, no_cache: bool = False
+    ) -> list[GroupMember]:
         """查群成员列表。"""
-        return await self.adapter.get_group_members(group_id)
+        return await self.adapter.get_group_members(group_id, no_cache=no_cache)
 
-    async def get_friends(self) -> list[Friend]:
+    async def get_friends(self, *, no_cache: bool = False) -> list[Friend]:
         """查好友列表。"""
-        return await self.adapter.get_friends()
+        return await self.adapter.get_friends(no_cache=no_cache)
 
     # ── 消息 ───────────────────────────────────────────────
 
-    async def send_nudge(self, conversation: ConversationRef, user_id: int) -> None:
+    async def send_nudge(
+        self, conversation: ConversationRef, user_id: int, *, is_self: bool = False
+    ) -> None:
         """戳一戳。"""
-        await self.adapter.send_nudge(conversation, user_id)
+        await self.adapter.send_nudge(conversation, user_id, is_self=is_self)
 
     async def send_reaction(
-        self, ref: MessageRef, face_id: str, *, add: bool = True
+        self,
+        ref: MessageRef,
+        face_id: str,
+        *,
+        add: bool = True,
+        reaction_type: ReactionType = ReactionType.FACE,
     ) -> None:
         """给消息加表情回应（或取消）。"""
-        await self.adapter.send_reaction(ref, face_id, add=add)
+        await self.adapter.send_reaction(
+            ref, face_id, add=add, reaction_type=reaction_type
+        )
 
     async def get_message(self, ref: MessageRef) -> Message:
         """按坐标取回一条消息。"""
         return await self.adapter.get_message(ref)
 
     async def get_history(
-        self, conversation: ConversationRef, count: int = 20
-    ) -> list[Message]:
-        """取最近的历史消息，从新到旧。"""
-        return await self.adapter.get_history(conversation, count)
+        self,
+        conversation: ConversationRef,
+        count: int = 20,
+        *,
+        start_seq: int | None = None,
+    ) -> MessagePage:
+        """取历史消息，从新到旧。
+
+        ``start_seq`` 传上一页的 ``page.next_seq`` 就是继续往前翻。
+        """
+        return await self.adapter.get_history(conversation, count, start_seq=start_seq)
 
     async def get_forwarded(self, forward_id: str) -> list[ForwardNode]:
         """取合并转发的内容。"""
@@ -248,9 +269,11 @@ class Bot:
         """设精华或取消精华。"""
         await self.adapter.set_essence(ref, add=add)
 
-    async def get_group_files(self, group_id: int) -> list[GroupFile]:
-        """取群文件列表。"""
-        return await self.adapter.get_group_files(group_id)
+    async def get_group_files(
+        self, group_id: int, *, folder_id: str = "/"
+    ) -> GroupFileList:
+        """取一个文件夹下的内容（文件和子文件夹）。"""
+        return await self.adapter.get_group_files(group_id, folder_id=folder_id)
 
     async def get_honor(
         self, group_id: int, honor_type: HonorType | None = None
@@ -362,9 +385,9 @@ class Bot:
         """取自定义表情的 URL 列表。"""
         return await self.adapter.get_custom_faces()
 
-    async def get_friend_info(self, user_id: int) -> Friend:
+    async def get_friend_info(self, user_id: int, *, no_cache: bool = False) -> Friend:
         """取好友资料（带备注、分组）。"""
-        return await self.adapter.get_friend_info(user_id)
+        return await self.adapter.get_friend_info(user_id, no_cache=no_cache)
 
     # ── 待处理的请求 ───────────────────────────────────────
 
@@ -375,10 +398,16 @@ class Bot:
         return await self.adapter.get_friend_requests(limit, filtered=filtered)
 
     async def get_group_notifications(
-        self, limit: int = 20, *, filtered: bool = False
-    ) -> list[dict[str, Any]]:
+        self,
+        limit: int = 20,
+        *,
+        filtered: bool = False,
+        start_seq: int | None = None,
+    ) -> GroupNotificationPage:
         """取群通知（入群申请、管理员变更…），按序列号从新到旧。"""
-        return await self.adapter.get_group_notifications(limit, filtered=filtered)
+        return await self.adapter.get_group_notifications(
+            limit, filtered=filtered, start_seq=start_seq
+        )
 
     # ── 好友与账号 ─────────────────────────────────────────
 
@@ -386,9 +415,9 @@ class Bot:
         """删好友。"""
         await self.adapter.delete_friend(user_id)
 
-    async def get_user_info(self, user_id: int) -> User:
+    async def get_user_info(self, user_id: int, *, no_cache: bool = False) -> User:
         """查某人的资料。"""
-        return await self.adapter.get_user_info(user_id)
+        return await self.adapter.get_user_info(user_id, no_cache=no_cache)
 
     async def like_profile(self, user_id: int, count: int = 1) -> None:
         """给资料卡点赞。"""

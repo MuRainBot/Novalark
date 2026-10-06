@@ -6,7 +6,9 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from .enums import GroupRole, HonorType, ProtocolPlatform, RequestState, UserSex
 
@@ -70,15 +72,53 @@ class GroupAnnouncement(Entity):
 
 
 class GroupFile(Entity):
-    """群文件。"""
+    """群文件。字段跟着 Milky 的 ``GroupFileEntity``。"""
 
     group_id: int = 0
     file_id: str = ""
     name: str = ""
     size: int = 0
+    parent_folder_id: str = ""  # 所在文件夹
     uploader_id: int = 0
     uploaded_time: int = 0
+    expire_time: int = 0
     downloaded_times: int = 0
+
+
+class GroupFolder(Entity):
+    """群文件夹。只有 Milky 有这个实体。"""
+
+    group_id: int = 0
+    folder_id: str = ""
+    parent_folder_id: str = ""
+    name: str = ""
+    creator_id: int = 0
+    created_time: int = 0
+    last_modified_time: int = 0
+    file_count: int = 0
+
+
+class GroupFileList(BaseModel):
+    """一个文件夹里的内容。
+
+    文件和文件夹是两种东西，协议也是分两个列表给的 —— 挤进一个
+    ``list[GroupFile]`` 就只能丢掉其中一边。
+    """
+
+    files: list[GroupFile] = Field(default_factory=list)
+    folders: list[GroupFolder] = Field(default_factory=list)
+
+
+class GroupNotificationPage(BaseModel):
+    """一页群通知。
+
+    ``next_seq`` 是继续往前翻的游标，原样传回
+    ``get_group_notifications(start_seq=...)`` 就是下一页；``None`` 表示没有
+    更早的了。
+    """
+
+    notifications: list[dict[str, Any]] = Field(default_factory=list)
+    next_seq: int | None = None
 
 
 class GroupHonor(Entity):

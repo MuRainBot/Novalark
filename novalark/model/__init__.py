@@ -11,10 +11,13 @@ from .entities import (
     Group,
     GroupAnnouncement,
     GroupFile,
+    GroupFileList,
+    GroupFolder,
     GroupHonor,
     GroupInviteRequest,
     GroupJoinRequest,
     GroupMember,
+    GroupNotificationPage,
     GroupRequest,
     ImplInfo,
     Sender,
@@ -71,7 +74,7 @@ from .events import (
     TempMessageEvent,
     UnknownEvent,
 )
-from .message import Content, Message, RichText
+from .message import Content, Message, MessagePage, RichText
 from .refs import ConversationRef, MessageRef
 from .segments import (
     Anonymous,
@@ -140,6 +143,8 @@ __all__ = [
     "GroupEssenceEvent",
     "GroupEvent",
     "GroupFile",
+    "GroupFileList",
+    "GroupFolder",
     "GroupHonor",
     "GroupHonorEvent",
     "GroupInviteRequest",
@@ -148,6 +153,7 @@ __all__ = [
     "GroupJoinRequestEvent",
     "GroupLuckyKingEvent",
     "GroupMember",
+    "GroupNotificationPage",
     "GroupMemberDecreaseEvent",
     "GroupMemberIncreaseEvent",
     "GroupMessageEvent",
@@ -173,6 +179,7 @@ __all__ = [
     "MarketFace",
     "MediaSegment",
     "Message",
+    "MessagePage",
     "MessageEvent",
     "MessageRef",
     "MessageScene",

@@ -181,6 +181,18 @@ class Message(BaseModel):
         return self.content.plain_text
 
 
+class MessagePage(BaseModel):
+    """一页历史消息。
+
+    ``next_seq`` 是继续往前翻的游标，原样传回 ``get_history(start_seq=...)``
+    就是下一页；``None`` 表示没有更早的了。它是个**位置**而不是坐标 ——
+    指向的那条消息可能已经被撤回，所以别拿它去 :meth:`get_message`。
+    """
+
+    messages: list[Message] = Field(default_factory=list)
+    next_seq: int | None = None
+
+
 #: 能当消息内容交给 :class:`RichText` / ``Bot.send`` / ``Bot.reply`` 的东西。
 #: 段序列可以任意嵌套，里面的 dict 会按 ``type`` 还原成具体段类。
 Content = RichText | Segment | str | list[Any] | tuple[Any, ...] | dict[str, Any]

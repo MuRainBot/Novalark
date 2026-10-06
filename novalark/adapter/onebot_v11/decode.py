@@ -194,6 +194,7 @@ def _decode_notice(data: dict[str, Any], **common: Any) -> Event:
                 file_id=str(file_field("id")),
                 name=str(file_field("name")),
                 size=to_int(file_field("size", 0)),
+                busid=to_int(file_field("busid", 0)),
                 **common,
             )
         case "notify":

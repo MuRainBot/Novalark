@@ -280,27 +280,39 @@ class OneBotV11Adapter(Adapter):
 
     # ── 查询 ───────────────────────────────────────────────
 
-    async def get_group(self, group_id: int) -> Group:
-        data = (await self.call("get_group_info", {"group_id": group_id})).unwrap()
+    async def get_group(self, group_id: int, *, no_cache: bool = False) -> Group:
+        data = (
+            await self.call(
+                "get_group_info", {"group_id": group_id, "no_cache": no_cache}
+            )
+        ).unwrap()
         return _to_group(group_id, data)
 
-    async def get_groups(self) -> list[Group]:
+    async def get_groups(self, *, no_cache: bool = False) -> list[Group]:
+        # get_group_list 没有 no_cache 开关：它是提示参数，忽略就是
         data = (await self.call("get_group_list")).unwrap()
         return [_to_group(0, item) for item in _as_list(data)]
 
-    async def get_group_member(self, group_id: int, user_id: int) -> GroupMember:
+    async def get_group_member(
+        self, group_id: int, user_id: int, *, no_cache: bool = False
+    ) -> GroupMember:
         result = await self.call(
-            "get_group_member_info", {"group_id": group_id, "user_id": user_id}
+            "get_group_member_info",
+            {"group_id": group_id, "user_id": user_id, "no_cache": no_cache},
         )
         return _to_member(group_id, user_id, result.unwrap())
 
-    async def get_group_members(self, group_id: int) -> list[GroupMember]:
+    async def get_group_members(
+        self, group_id: int, *, no_cache: bool = False
+    ) -> list[GroupMember]:
+        # get_group_member_list 同上，没有这个开关
         data = (
             await self.call("get_group_member_list", {"group_id": group_id})
         ).unwrap()
         return [_to_member(group_id, 0, item) for item in _as_list(data)]
 
-    async def get_friends(self) -> list[Friend]:
+    async def get_friends(self, *, no_cache: bool = False) -> list[Friend]:
+        # get_friend_list 同上
         data = (await self.call("get_friend_list")).unwrap()
         return [Friend.model_validate(item) for item in _as_list(data)]
 
@@ -375,8 +387,12 @@ class OneBotV11Adapter(Adapter):
 
     # ── 好友与账号 ─────────────────────────────────────────
 
-    async def get_user_info(self, user_id: int) -> User:
-        data = (await self.call("get_stranger_info", {"user_id": user_id})).unwrap()
+    async def get_user_info(self, user_id: int, *, no_cache: bool = False) -> User:
+        data = (
+            await self.call(
+                "get_stranger_info", {"user_id": user_id, "no_cache": no_cache}
+            )
+        ).unwrap()
         return User.model_validate(data if isinstance(data, dict) else {})
 
     async def like_profile(self, user_id: int, count: int = 1) -> None:

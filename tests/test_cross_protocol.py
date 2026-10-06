@@ -24,6 +24,7 @@ from novalark.model import (
     ImageSubType,
     LightApp,
     Reply,
+    RichText,
     Text,
     UnknownEvent,
     UnknownSegment,
@@ -120,6 +121,28 @@ def test_a_concept_lands_on_the_same_segment(concept, model, ob_seg, mk_seg):
     assert isinstance(from_ob, model), concept
     assert isinstance(from_mk, model), concept
     assert from_ob.type == from_mk.type, concept
+
+
+@pytest.mark.parametrize(
+    "concept, model, ob_seg, mk_seg", _CONCEPTS, ids=[c[0] for c in _CONCEPTS]
+)
+def test_a_decoded_segment_survives_a_round_trip(concept, model, ob_seg, mk_seg):
+    """decode 认得的段名，``_SEGMENT_REGISTRY`` 也得认得。
+
+    两边各有一张表（decoder 的 match 分支、模型层的段名注册表），漏了一边
+    就会出现：同一个段从事件收来是 ``At``，把 dict 存下来再读回来变成
+    ``UnknownSegment``。Milky 的 ``mention_all`` 就这么漏过。
+    """
+    for decode, seg in ((ob, ob_seg), (mk, mk_seg)):
+        original = decode([seg]).content.segments[0]
+        dumped = {"segments": [original.model_dump()]}
+        restored = RichText.model_validate(dumped).segments[0]
+
+        assert not isinstance(restored, UnknownSegment), f"{concept}（{seg['type']}）"
+        assert isinstance(restored, model), concept
+        assert restored.type == original.type, concept
+        # 还原成基类是允许的：``OneBotForward`` 这类协议子类只在 decode 时产生
+        assert isinstance(original, type(restored)), concept
 
 
 @pytest.mark.parametrize(

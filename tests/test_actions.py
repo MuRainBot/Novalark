@@ -27,6 +27,7 @@ from novalark.model import (
     GroupJoinRequestEvent,
     MessageRef,
     MessageScene,
+    ReactionType,
     RequestState,
     RichText,
     Text,
@@ -294,7 +295,11 @@ def test_milky_covers_what_onebot_lacks(scenario):
 
         await bot.send_nudge(FRIEND, 999)
         assert rec.action == "send_friend_nudge"
-        assert rec.params == {"user_id": 999}
+        assert rec.params == {"user_id": 999, "is_self": False}
+
+        # is_self 是私聊戳专属（戳自己），群戳没这个概念
+        await bot.send_nudge(FRIEND, 999, is_self=True)
+        assert rec.params == {"user_id": 999, "is_self": True}
 
         await bot.send_reaction(MessageRef(conversation=GROUP, seq=42), "124")
         assert rec.action == "send_group_message_reaction"
@@ -302,8 +307,16 @@ def test_milky_covers_what_onebot_lacks(scenario):
             "group_id": 12345,
             "message_seq": 42,
             "reaction": "124",
+            "reaction_type": "face",
             "is_add": True,
         }
+
+        await bot.send_reaction(
+            MessageRef(conversation=GROUP, seq=42),
+            "😀",
+            reaction_type=ReactionType.EMOJI,
+        )
+        assert rec.params["reaction_type"] == "emoji"
 
         await bot.set_member_title(12345, 999, "大佬")
         assert rec.params["special_title"] == "大佬"
@@ -319,7 +332,130 @@ def test_milky_covers_what_onebot_lacks(scenario):
         # Milky 有 —— 直接用 Milky 自己的定义
         await bot.set_nickname("新名字")
         assert rec.action == "set_nickname"
-        assert rec.params == {"nickname": "新名字"}
+        assert rec.params == {"new_nickname": "新名字"}
+
+    scenario(body)
+
+
+# ── 翻页与协议特有的参数 ────────────────────────────────────
+#
+# 适配器把富接口压成窄抽象时参数会无声地掉。这几个接口协议都给了翻页游标
+# （入参 ``start_*_seq`` + 出参 ``next_*_seq`` 成对出现），只取第一页就再也
+# 翻不动了。
+
+
+def test_milky_history_pages_and_reads_newest_first(scenario):
+    """Milky 的 messages 是升序（最旧在前），契约是从新到旧 —— 得翻过来。"""
+
+    async def body():
+        rec = Recorder(
+            {
+                "messages": [
+                    {"message_seq": 1, "sender_id": 9, "time": 1, "segments": []},
+                    {"message_seq": 2, "sender_id": 9, "time": 2, "segments": []},
+                ],
+                "next_message_seq": 0,
+            }
+        )
+        bot = (await _milky(rec)).bot
+
+        page = await bot.get_history(GROUP, count=2, start_seq=99)
+        assert rec.action == "get_history_messages"
+        assert rec.params["start_message_seq"] == 99
+        assert rec.params["limit"] == 2
+        assert [m.ref.seq for m in page.messages] == [2, 1]
+        assert page.next_seq is None  # 0 当「到头了」，不是真的游标
+
+    scenario(body)
+
+
+def test_milky_history_omits_the_cursor_on_the_first_page(scenario):
+    """不翻页就不发这个参数 —— 协议那边「不提供则从最新消息开始」。"""
+
+    async def body():
+        rec = Recorder({"messages": [], "next_message_seq": 7})
+        bot = (await _milky(rec)).bot
+
+        page = await bot.get_history(GROUP)
+        assert "start_message_seq" not in rec.params
+        assert page.next_seq == 7  # 有下一页
+
+    scenario(body)
+
+
+def test_milky_notifications_pages(scenario):
+    """群通知是同一个模式：游标入参 + 下一页出参。"""
+
+    async def body():
+        rec = Recorder(
+            {
+                "notifications": [{"type": "join_request", "notification_seq": 5}],
+                "next_notification_seq": 4,
+            }
+        )
+        bot = (await _milky(rec)).bot
+
+        page = await bot.get_group_notifications(limit=10, start_seq=9)
+        assert rec.params["start_notification_seq"] == 9
+        assert page.notifications[0]["notification_seq"] == 5
+        assert page.next_seq == 4
+
+    scenario(body)
+
+
+def test_milky_group_files_keeps_folders(scenario):
+    """文件夹和文件是两种东西，协议分两个列表给。"""
+
+    async def body():
+        rec = Recorder(
+            {
+                "files": [{"file_id": "f1", "file_name": "a.txt", "file_size": 9}],
+                "folders": [{"folder_id": "d1", "folder_name": "子目录"}],
+            }
+        )
+        bot = (await _milky(rec)).bot
+
+        listing = await bot.get_group_files(12345, folder_id="d0")
+        assert rec.params["parent_folder_id"] == "d0"
+        assert [f.file_id for f in listing.files] == ["f1"]
+        # 协议叫 file_name / file_size，模型里叫 name / size —— 少了这层映射
+        # 值会静默掉进 model_extra，字段看着有、实际是空的
+        assert listing.files[0].name == "a.txt"
+        assert listing.files[0].size == 9
+        assert listing.folders[0].name == "子目录"
+
+    scenario(body)
+
+
+def test_no_cache_is_a_hint_so_unsupported_ends_ignore_it(scenario):
+    """``no_cache`` 只影响「多新鲜」，不影响「能不能」—— 协议没这个开关就忽略。"""
+
+    async def body():
+        # Milky 的 get_group_info 有
+        rec = Recorder({"group_id": 12345})
+        bot = (await _milky(rec)).bot
+        await bot.get_group(12345, no_cache=True)
+        assert rec.params["no_cache"] is True
+
+        # Milky 的 get_user_profile 没有
+        rec = Recorder({"profile": {"user_id": 999}})
+        bot = (await _milky(rec)).bot
+        await bot.get_user_info(999, no_cache=True)
+        assert rec.action == "get_user_profile"
+        assert "no_cache" not in rec.params
+
+        # OneBot 标准的 get_group_info 有
+        rec = Recorder({"group_id": 12345})
+        bot = (await _onebot(rec)).bot
+        await bot.get_group(12345, no_cache=True)
+        assert rec.params == {"group_id": 12345, "no_cache": True}
+
+        # 标准的 get_group_list 没有
+        rec = Recorder([])
+        bot = (await _onebot(rec)).bot
+        await bot.get_groups(no_cache=True)
+        assert rec.action == "get_group_list"
+        assert rec.params == {}
 
     scenario(body)
 

@@ -674,8 +674,11 @@ _SEGMENT_REGISTRY: dict[str, type[Segment]] = {
     # UnknownSegment
     "json": LightApp,
     "light_app": LightApp,
-    # Milky 的 @ 段；模型里统一叫 at
+    # Milky 的 @ 段；模型里统一叫 at。@全体是同一个类的 user_id 留空形态，
+    # 但协议给了两个段名，两个键都得认 —— 少一个的话，从事件收进来是 ``At``，
+    # 把同样的 dict 反序列化回来就成了 ``UnknownSegment``。
     "mention": At,
+    "mention_all": At,
     "markdown": Markdown,
     "market_face": MarketFace,
     "poke": Poke,

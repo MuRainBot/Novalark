@@ -18,19 +18,22 @@ from ...model.entities import (
     GroupRequest,
     GroupAnnouncement,
     GroupFile,
+    GroupFileList,
+    GroupFolder,
     GroupMember,
+    GroupNotificationPage,
     ImplInfo,
     User,
 )
 from ...model.entities import Sender
-from ...model.enums import ActionStatus, RequestState
+from ...model.enums import ActionStatus, ReactionType, RequestState
 from ...model.events import (
     FriendRequestEvent,
     GroupInviteRequestEvent,
     GroupJoinRequestEvent,
     GroupRequestEvent,
 )
-from ...model.message import Message, RichText
+from ...model.message import Message, MessagePage, RichText
 from ...model.refs import ConversationRef, MessageRef, MessageScene
 from .._util import to_int
 from ..base import Adapter, UnsupportedAction, register_adapter
@@ -267,33 +270,46 @@ class MilkyAdapter(Adapter):
 
     # ── 查询 ───────────────────────────────────────────────
 
-    async def get_group(self, group_id: int) -> Group:
-        data = (await self.call("get_group_info", {"group_id": group_id})).unwrap()
+    async def get_group(self, group_id: int, *, no_cache: bool = False) -> Group:
+        data = (
+            await self.call(
+                "get_group_info", {"group_id": group_id, "no_cache": no_cache}
+            )
+        ).unwrap()
         return _to_group(data)
 
-    async def get_groups(self) -> list[Group]:
-        data = (await self.call("get_group_list")).unwrap()
+    async def get_groups(self, *, no_cache: bool = False) -> list[Group]:
+        data = (await self.call("get_group_list", {"no_cache": no_cache})).unwrap()
         return [_to_group(item) for item in _unbox(data, "groups")]
 
-    async def get_group_member(self, group_id: int, user_id: int) -> GroupMember:
+    async def get_group_member(
+        self, group_id: int, user_id: int, *, no_cache: bool = False
+    ) -> GroupMember:
         result = await self.call(
-            "get_group_member_info", {"group_id": group_id, "user_id": user_id}
+            "get_group_member_info",
+            {"group_id": group_id, "user_id": user_id, "no_cache": no_cache},
         )
         return _to_member(group_id, user_id, result.unwrap())
 
-    async def get_group_members(self, group_id: int) -> list[GroupMember]:
+    async def get_group_members(
+        self, group_id: int, *, no_cache: bool = False
+    ) -> list[GroupMember]:
         data = (
-            await self.call("get_group_member_list", {"group_id": group_id})
+            await self.call(
+                "get_group_member_list", {"group_id": group_id, "no_cache": no_cache}
+            )
         ).unwrap()
         return [_to_member(group_id, 0, item) for item in _unbox(data, "members")]
 
-    async def get_friends(self) -> list[Friend]:
-        data = (await self.call("get_friend_list")).unwrap()
+    async def get_friends(self, *, no_cache: bool = False) -> list[Friend]:
+        data = (await self.call("get_friend_list", {"no_cache": no_cache})).unwrap()
         return [Friend.model_validate(item) for item in _unbox(data, "friends")]
 
     # ── 消息 ───────────────────────────────────────────────
 
-    async def send_nudge(self, conversation: ConversationRef, user_id: int) -> None:
+    async def send_nudge(
+        self, conversation: ConversationRef, user_id: int, *, is_self: bool = False
+    ) -> None:
         if conversation.scene is MessageScene.GROUP:
             (
                 await self.call(
@@ -303,11 +319,19 @@ class MilkyAdapter(Adapter):
             ).unwrap()
             return
         (
-            await self.call("send_friend_nudge", {"user_id": conversation.peer_id})
+            await self.call(
+                "send_friend_nudge",
+                {"user_id": conversation.peer_id, "is_self": is_self},
+            )
         ).unwrap()
 
     async def send_reaction(
-        self, ref: MessageRef, face_id: str, *, add: bool = True
+        self,
+        ref: MessageRef,
+        face_id: str,
+        *,
+        add: bool = True,
+        reaction_type: ReactionType = ReactionType.FACE,
     ) -> None:
         # 表情回应只有群接口，私聊里拿 peer_id 当群号会把对方 QQ 号发出去
         if ref.conversation.scene is not MessageScene.GROUP:
@@ -319,6 +343,7 @@ class MilkyAdapter(Adapter):
                     "group_id": ref.conversation.peer_id,
                     "message_seq": ref.seq,
                     "reaction": face_id,
+                    "reaction_type": reaction_type.value,
                     "is_add": add,
                 },
             )
@@ -336,20 +361,31 @@ class MilkyAdapter(Adapter):
         return _to_message(result.unwrap(), self.bot.self_id)
 
     async def get_history(
-        self, conversation: ConversationRef, count: int = 20
-    ) -> list[Message]:
-        result = await self.call(
-            "get_history_messages",
-            {
-                "message_scene": conversation.scene.value,
-                "peer_id": conversation.peer_id,
-                "limit": count,
-            },
-        )
-        return [
-            _to_message(item, self.bot.self_id)
-            for item in _unbox(result.unwrap(), "messages")
+        self,
+        conversation: ConversationRef,
+        count: int = 20,
+        *,
+        start_seq: int | None = None,
+    ) -> MessagePage:
+        params: dict[str, Any] = {
+            "message_scene": conversation.scene.value,
+            "peer_id": conversation.peer_id,
+            "limit": count,
+        }
+        if start_seq is not None:
+            params["start_message_seq"] = start_seq
+        data = (await self.call("get_history_messages", params)).unwrap()
+        raw = data if isinstance(data, dict) else {}
+
+        messages = [
+            _to_message(item, self.bot.self_id) for item in _unbox(data, "messages")
         ]
+        # 协议按 message_seq 升序给（最旧在前），契约是从新到旧
+        messages.reverse()
+        return MessagePage(
+            messages=messages,
+            next_seq=to_int(raw.get("next_message_seq")) or None,
+        )
 
     async def get_forwarded(self, forward_id: str) -> list[ForwardNode]:
         result = await self.call("get_forwarded_messages", {"forward_id": forward_id})
@@ -444,11 +480,18 @@ class MilkyAdapter(Adapter):
             )
         ).unwrap()
 
-    async def get_group_files(self, group_id: int) -> list[GroupFile]:
-        result = await self.call("get_group_files", {"group_id": group_id})
-        return [
-            GroupFile.model_validate(item) for item in _unbox(result.unwrap(), "files")
-        ]
+    async def get_group_files(
+        self, group_id: int, *, folder_id: str = "/"
+    ) -> GroupFileList:
+        result = await self.call(
+            "get_group_files",
+            {"group_id": group_id, "parent_folder_id": folder_id},
+        )
+        data = result.unwrap()
+        return GroupFileList(
+            files=[_to_file(item) for item in _unbox(data, "files")],
+            folders=[_to_folder(item) for item in _unbox(data, "folders")],
+        )
 
     # ── 群文件 ─────────────────────────────────────────────
 
@@ -620,8 +663,10 @@ class MilkyAdapter(Adapter):
         data = (await self.call("get_custom_face_url_list")).unwrap()
         return [str(item) for item in _unbox(data, "urls")]
 
-    async def get_friend_info(self, user_id: int) -> Friend:
-        result = await self.call("get_friend_info", {"user_id": user_id})
+    async def get_friend_info(self, user_id: int, *, no_cache: bool = False) -> Friend:
+        result = await self.call(
+            "get_friend_info", {"user_id": user_id, "no_cache": no_cache}
+        )
         return Friend.model_validate(_unbox_one(result.unwrap(), "friend"))
 
     # ── 待处理的请求 ───────────────────────────────────────
@@ -648,23 +693,32 @@ class MilkyAdapter(Adapter):
         ]
 
     async def get_group_notifications(
-        self, limit: int = 20, *, filtered: bool = False
-    ) -> list[dict[str, Any]]:
-        result = await self.call(
-            "get_group_notifications", {"limit": limit, "is_filtered": filtered}
+        self,
+        limit: int = 20,
+        *,
+        filtered: bool = False,
+        start_seq: int | None = None,
+    ) -> GroupNotificationPage:
+        params: dict[str, Any] = {"limit": limit, "is_filtered": filtered}
+        if start_seq is not None:
+            params["start_notification_seq"] = start_seq
+        data = (await self.call("get_group_notifications", params)).unwrap()
+        raw = data if isinstance(data, dict) else {}
+        return GroupNotificationPage(
+            # 协议按 notification_seq **降序**给，正合「从新到旧」的契约
+            notifications=[
+                item for item in _unbox(data, "notifications") if isinstance(item, dict)
+            ],
+            next_seq=to_int(raw.get("next_notification_seq")) or None,
         )
-        return [
-            item
-            for item in _unbox(result.unwrap(), "notifications")
-            if isinstance(item, dict)
-        ]
 
     # ── 好友与账号 ─────────────────────────────────────────
 
     async def delete_friend(self, user_id: int) -> None:
         (await self.call("delete_friend", {"user_id": user_id})).unwrap()
 
-    async def get_user_info(self, user_id: int) -> User:
+    async def get_user_info(self, user_id: int, *, no_cache: bool = False) -> User:
+        # Milky 的 get_user_profile 没有 no_cache 开关：它是提示参数，忽略就是
         result = await self.call("get_user_profile", {"user_id": user_id})
         return User.model_validate(_unbox_one(result.unwrap(), "profile"))
 
@@ -674,13 +728,14 @@ class MilkyAdapter(Adapter):
         ).unwrap()
 
     async def set_nickname(self, nickname: str) -> None:
-        (await self.call("set_nickname", {"nickname": nickname})).unwrap()
+        (await self.call("set_nickname", {"new_nickname": nickname})).unwrap()
 
     async def set_bio(self, bio: str) -> None:
-        (await self.call("set_bio", {"bio": bio})).unwrap()
+        (await self.call("set_bio", {"new_bio": bio})).unwrap()
 
     async def set_avatar(self, uri: str) -> None:
-        (await self.call("set_avatar", {"image_uri": uri})).unwrap()
+        # 个人的这个叫 uri，群头像那边才叫 image_uri
+        (await self.call("set_avatar", {"uri": uri})).unwrap()
 
     # ── 请求处理 ───────────────────────────────────────────
 
@@ -797,4 +852,24 @@ def _to_group(data: Any) -> Group:
             "group_id": to_int(raw.get("group_id")),
             "name": str(raw.get("group_name") or ""),
         }
+    )
+
+
+def _to_file(item: Any) -> GroupFile:
+    """协议叫 ``file_name`` / ``file_size``，模型里叫 ``name`` / ``size``。"""
+    raw = item if isinstance(item, dict) else {}
+    return GroupFile.model_validate(
+        {
+            **raw,
+            "name": str(raw.get("file_name") or ""),
+            "size": to_int(raw.get("file_size")),
+        }
+    )
+
+
+def _to_folder(item: Any) -> GroupFolder:
+    """协议叫 ``folder_name``。"""
+    raw = item if isinstance(item, dict) else {}
+    return GroupFolder.model_validate(
+        {**raw, "name": str(raw.get("folder_name") or "")}
     )

@@ -336,6 +336,7 @@ class FileUploadEvent(GroupEvent):
     file_id: str = ""
     name: str = ""
     size: int = 0
+    busid: int = 0  # OneBot 给的「busid」（它自己也没说清是什么），Milky 不给
 
 
 class PeerPinChangeEvent(Event):
