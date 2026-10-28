@@ -290,7 +290,7 @@ def test_file_segment_is_not_standard():
     assert seg.model_dump() == {"type": "file", "data": {"file": "f1"}}
 
     with pytest.raises(UnsupportedSegment, match="file"):
-        encode_segments(RichText(segments=[File(uri="f1")]))
+        encode_segments(RichText(segments=[File(file_id="f1")]))
 
 
 def test_face_roundtrips_and_has_neutral_defaults():

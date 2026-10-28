@@ -449,15 +449,28 @@ def _decode_segment(data: Any, conversation: ConversationRef) -> Segment:
                     ),
                 }
             )
-        case "image" | "record" | "video" | "file":
+        case "image" | "record" | "video":
             cls = MEDIA_CLASSES[seg_type]
             return cls.model_validate(
                 {
                     **fields,
                     "raw": raw,
-                    "uri": _incoming_uri(seg_type, fields),
+                    "uri": _incoming_uri(fields),
                     "temp_url": _text_or_none(fields.get("temp_url")),
                     **_media_fields(seg_type, fields),
+                }
+            )
+        case "file":
+            # file_id 不是自包含的句柄：换成链接还要会话坐标，由业务层调
+            # Bot.get_group_file_url / get_private_file_url
+            return MEDIA_CLASSES[seg_type].model_validate(
+                {
+                    "raw": raw,
+                    "file_id": text("file_id"),
+                    "temp_url": _text_or_none(fields.get("temp_url")),
+                    "name": text("file_name"),
+                    "size": to_int(fields.get("file_size")),
+                    "file_hash": text("file_hash"),
                 }
             )
         case "face":
@@ -478,9 +491,9 @@ def _decode_segment(data: Any, conversation: ConversationRef) -> Segment:
             return UnknownSegment.model_validate({**data, "type": seg_type})
 
 
-def _incoming_uri(seg_type: str, fields: dict[str, Any]) -> str:
-    """内容标识符：优先协议端句柄，没有就用临时链接兜底。"""
-    handle = fields.get("file_id") if seg_type == "file" else fields.get("resource_id")
+def _incoming_uri(fields: dict[str, Any]) -> str:
+    """媒体段的内容标识符：优先协议端句柄，没有就用临时链接兜底。"""
+    handle = fields.get("resource_id")
     if handle not in (None, ""):
         return f"milky:{handle}"
     return str(fields.get("temp_url") or "")
@@ -503,12 +516,6 @@ def _media_fields(seg_type: str, fields: dict[str, Any]) -> dict[str, Any]:
             "duration": to_int(fields.get("duration")),
             "width": _int_or_none(fields.get("width")),
             "height": _int_or_none(fields.get("height")),
-        }
-    if seg_type == "file":
-        return {
-            "name": str(fields.get("file_name") or ""),
-            "size": to_int(fields.get("file_size")),
-            "file_hash": str(fields.get("file_hash") or ""),
         }
     return {}
 

@@ -6,6 +6,10 @@ Milky 收到媒体时只给一个协议端内部的 ``resource_id``，另配一�
 这不只是"想要个能下载的地址"：``OutgoingSegment`` 的媒体段只认 ``uri``，
 **入站结构里的 ``resource_id`` 在出站结构里没有对应字段**，所以转发收到的
 媒体必须走这一跳。见 :func:`novalark.adapter.milky.encode.resolve_handles`。
+
+文件段不在这套里：它的 ``file_id`` 不是 ``resource_id``，换下载链接还要群号 /
+用户号，而段不知道自己属于哪条会话。链接由业务层调
+``Bot.get_group_file_url`` / ``Bot.get_private_file_url`` 现问。
 """
 
 from __future__ import annotations
@@ -27,8 +31,8 @@ HANDLE_PREFIX = "milky:"
 
 #: Milky 认的媒体段，也是句柄能当 ``resource_id`` 用的那三个。
 #: ``OutgoingSegment`` 只有 image / record / video —— 它**没有 ``file``**
-#: （发文件走 ``upload_*`` API），而 file 段的句柄是 ``file_id``，和
-#: ``resource_id`` 不是一回事。
+#: （发文件走 ``upload_*`` API），而 file 段的 ``file_id`` 也不是
+#: ``resource_id``，换链接要会话坐标。
 MEDIA_TYPES = ("image", "record", "video")
 
 
@@ -46,8 +50,8 @@ async def resolve_media(seg_type: str, uri: str) -> str:
     """``milky:<resource_id>`` → 能访问的地址。
 
     适配器（``MilkyAdapter._media_url``）和段子类共用这一条。文件段不在这里：
-    它的句柄是 ``file_id``，取下载链接要带群号调
-    ``get_group_file_download_url``，而段里没有群号。
+    ``file_id`` 换下载链接要群号 / 用户号，而段里没有会话坐标，业务层调
+    ``Bot.get_group_file_url`` / ``Bot.get_private_file_url``。
     """
     if seg_type in MEDIA_TYPES and uri.startswith(HANDLE_PREFIX):
         return await temp_url(uri.removeprefix(HANDLE_PREFIX))
@@ -79,10 +83,6 @@ class MilkyVideo(_Resolvable, Video):
     pass
 
 
-class MilkyFile(_Resolvable, File):
-    pass
-
-
 class MilkyForward(Forward):
     """合并转发。``_load`` 补上基类缺的那一跳：拿 ``forward_id`` 去取内容。"""
 
@@ -97,5 +97,5 @@ MEDIA_CLASSES = {
     "image": MilkyImage,
     "record": MilkyRecord,
     "video": MilkyVideo,
-    "file": MilkyFile,
+    "file": File,
 }

@@ -157,7 +157,7 @@ class At(Segment):
 
 
 class MediaSegment(Segment):
-    """带外部内容的段：图片、语音、视频、文件。
+    """带外部内容的段：图片、语音、视频。
 
     ``uri`` 是内容标识符，**不保证能直接访问**：它可能是 ``http(s)://`` /
     ``file://`` / ``base64://`` 这类地址，也可能是 ``onebot:abc.jpg`` 这样的
@@ -281,32 +281,41 @@ class Video(MediaSegment):
         )
 
 
-class File(MediaSegment):
+class File(Segment):
     """文件。
 
+    ``file_id`` **不是自包含的内容标识符**：换成下载链接还要知道它在哪个群、
+    或者哪个人发的（私聊还要 ``file_hash``），而段不知道自己属于哪条会话。
+    所以它不继承 ``MediaSegment``，也没有 ``get_url()``——链接由业务层带上
+    会话坐标调 ``Bot.get_group_file_url`` / ``Bot.get_private_file_url`` 现问。
+
     ``file_hash`` 是 Milky 给的 TriSHA1（**仅私聊文件有**），OneBot 不给。
+
+    ``temp_url`` 是收到那一刻的地址快照，会过期；刚收到的文件可以直接用它。
     """
 
     type: str = "file"
+    file_id: str = ""
     name: str = ""
     size: int = 0
     file_hash: str = ""
+    temp_url: str | None = None
 
     def __init__(
         self,
-        uri: str = "",
-        temp_url: str | None = None,
+        file_id: str = "",
         name: str = "",
         size: int = 0,
         file_hash: str = "",
+        temp_url: str | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(
-            uri=uri,
-            temp_url=temp_url,
+            file_id=file_id,
             name=name,
             size=size,
             file_hash=file_hash,
+            temp_url=temp_url,
             **kwargs,
         )
 

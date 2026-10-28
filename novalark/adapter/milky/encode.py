@@ -14,6 +14,7 @@ from ...model.message import RichText
 from ...model.segments import (
     At,
     Face,
+    File,
     Forward,
     ForwardNode,
     LightApp,
@@ -149,11 +150,15 @@ def _encode_segment(seg: Segment) -> dict[str, Any]:
                 "data": {"message_seq": seg.ref.seq if seg.ref else 0},
             }
 
+        case File():
+            # 出站没有这个段类型（Milky 的 file 走上传 API）
+            raise UnsupportedSegment(seg.type, "Milky")
+
         case MediaSegment() if seg.type in MEDIA_TYPES:
             return {"type": seg.type, "data": _media_data(seg)}
 
         case MediaSegment():
-            # 出站没有这个段类型（Milky 的 file 走上传 API）
+            # 出站没有这个段类型
             raise UnsupportedSegment(seg.type, "Milky")
 
         case Forward():

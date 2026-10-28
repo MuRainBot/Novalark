@@ -370,7 +370,7 @@ def test_market_face_decodes_but_cannot_be_sent():
 def test_file_segment_cannot_be_sent():
     """Milky 没有出站的 ``file`` 段 —— 发文件走 ``upload_*`` API。"""
     with pytest.raises(UnsupportedSegment):
-        encode_segments(RichText(segments=[File(uri="file:///tmp/a.txt")]))
+        encode_segments(RichText(segments=[File(file_id="f1")]))
 
 
 def test_reference_only_forward_survives_encoding():
